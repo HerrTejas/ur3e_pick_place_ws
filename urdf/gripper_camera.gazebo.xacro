@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 
+    Gazebo Camera Sensor Plugin
+    This makes the camera actually work in Gazebo simulation
+  -->
+  <xacro:macro name="gripper_camera_gazebo" params="prefix">
+
+    <!-- 
+      <gazebo reference="..."> tells Gazebo which link has the sensor
+    -->
+    <gazebo reference="${prefix}gripper_camera_link">
+      
+      <!-- 
+        SENSOR DEFINITION
+        - name: unique identifier
+        - type: "camera" for RGB camera (could also be "depth_camera", "rgbd_camera")
+      -->
+      <sensor name="gripper_camera" type="camera">
+        
+        <camera>
+          <!-- Field of view in radians (1.396 rad ≈ 80 degrees) -->
+          <horizontal_fov>1.3962634</horizontal_fov>
+          
+          <!-- Image resolution and format -->
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          
+          <!-- Min/max viewing distance -->
+          <clip>
+            <near>0.01</near>
+            <far>10</far>
+          </clip>
+          
+          <!-- Add slight noise for realism -->
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+          
+          <!-- Links image data to the optical frame for proper 3D coordinates -->
+          <optical_frame_id>${prefix}gripper_camera_optical_link</optical_frame_id>
+        </camera>
+        
+        <!-- Sensor settings -->
+        <always_on>1</always_on>
+        <update_rate>20</update_rate>
+        <visualize>true</visualize>
+        
+        <!-- Gazebo topic where images are published -->
+        <topic>gripper_camera/image</topic>
+      </sensor>
+      
+    </gazebo>
+
+  </xacro:macro>
+
+</robot>

@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 
+    Gripper Camera Macro
+    This adds a camera to the UR3e gripper for vision-based pick and place
+  -->
+  <xacro:macro name="gripper_camera" params="prefix">
+
+    <!-- 
+      CAMERA JOINT - Attaches camera to gripper base
+      - type="fixed": Camera doesn't move relative to gripper
+      - parent: rh_p12_rn_base (gripper base link)
+      - origin xyz: Position relative to parent (x=forward, y=left, z=up)
+        We put it slightly above and behind the gripper fingers
+    -->
+    <joint type="fixed" name="${prefix}gripper_camera_joint">
+      <origin xyz="0.0 0.0 0.02" rpy="0 0.5 0"/>
+      <parent link="${prefix}rh_p12_rn_base"/>
+      <child link="${prefix}gripper_camera_link"/>
+    </joint>
+
+    <!-- 
+      CAMERA LINK - The physical camera body
+      - Small mass for physics simulation
+      - Visual: blue box so we can see it in Gazebo/RViz
+    -->
+    <link name='${prefix}gripper_camera_link'>
+      <inertial>
+        <mass value="0.001"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+      </inertial>
+      <visual name='gripper_camera_link_visual'>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.02 0.02 0.02"/>
+        </geometry>
+        <material name="camera_blue">
+          <color rgba="0.0 0.0 0.8 1.0"/>
+        </material>
+      </visual>
+    </link>
+
+    <!-- 
+      OPTICAL FRAME JOINT
+      - Cameras in ROS use different coordinate system
+      - Robot: X=forward, Y=left, Z=up
+      - Camera: Z=forward, X=right, Y=down
+      - rpy="-1.5707 0 -1.5707" rotates to match camera convention
+    -->
+    <joint type="fixed" name="${prefix}gripper_camera_optical_joint">
+      <origin xyz="0 0 0" rpy="-1.5707 0 -1.5707"/>
+      <parent link="${prefix}gripper_camera_link"/>
+      <child link="${prefix}gripper_camera_optical_link"/>
+    </joint>
+
+    <!-- 
+      OPTICAL LINK - Empty link just for the coordinate frame
+      Image processing uses this frame for 3D calculations
+    -->
+    <link name="${prefix}gripper_camera_optical_link"/>
+
+  </xacro:macro>
+
+</robot>
