@@ -32,6 +32,8 @@ setup(
             'color_tuner = ur3e_vision_pick_place.color_tuner:main',
             'object_detector_3d = ur3e_vision_pick_place.object_detector_3d:main',
             'single_color_detector = ur3e_vision_pick_place.single_color_detector:main',
+            'pick_and_place = ur3e_vision_pick_place.pick_and_place:main',
+            'joint_tester = ur3e_vision_pick_place.joint_tester:main',
         ],
     },
 )

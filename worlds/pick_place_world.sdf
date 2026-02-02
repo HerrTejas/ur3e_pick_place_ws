@@ -113,7 +113,7 @@
       </link>
     </model>
 
-    <!-- Red Box -->
+    <!-- Red Box (larger: 6cm x 6cm x 6cm) -->
     <model name="red_box">
       <pose>0.4 0 0.45 0 0 0</pose>
       <link name="link">
@@ -125,13 +125,13 @@
           </inertia>
         </inertial>
         <collision name="collision">
-          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
           <surface>
             <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
           </surface>
         </collision>
         <visual name="visual">
-          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
           <material>
             <ambient>0.8 0.1 0.1 1</ambient>
             <diffuse>0.8 0.1 0.1 1</diffuse>
@@ -140,7 +140,7 @@
       </link>
     </model>
 
-    <!-- Green Cylinder -->
+    <!-- Green Cylinder (larger: radius 3cm, height 8cm) -->
     <model name="green_cylinder">
       <pose>0.4 0.15 0.45 0 0 0</pose>
       <link name="link">
@@ -152,13 +152,13 @@
           </inertia>
         </inertial>
         <collision name="collision">
-          <geometry><cylinder><radius>0.02</radius><length>0.06</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.04</radius><length>0.08</length></cylinder></geometry>
           <surface>
             <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
           </surface>
         </collision>
         <visual name="visual">
-          <geometry><cylinder><radius>0.02</radius><length>0.06</length></cylinder></geometry>
+          <geometry><cylinder><radius>0.04</radius><length>0.08</length></cylinder></geometry>
           <material>
             <ambient>0.1 0.8 0.1 1</ambient>
             <diffuse>0.1 0.8 0.1 1</diffuse>
@@ -167,7 +167,7 @@
       </link>
     </model>
 
-    <!-- Blue Box -->
+    <!-- Blue Box (larger: 6cm x 6cm x 6cm) -->
     <model name="blue_box">
       <pose>0.4 -0.15 0.45 0 0 0</pose>
       <link name="link">
@@ -179,13 +179,13 @@
           </inertia>
         </inertial>
         <collision name="collision">
-          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
           <surface>
             <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
           </surface>
         </collision>
         <visual name="visual">
-          <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <geometry><box><size>0.06 0.06 0.06</size></box></geometry>
           <material>
             <ambient>0.1 0.1 0.8 1</ambient>
             <diffuse>0.1 0.1 0.8 1</diffuse>
