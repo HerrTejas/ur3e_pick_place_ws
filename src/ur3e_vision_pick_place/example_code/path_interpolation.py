@@ -42,7 +42,7 @@ class PathInterpolation:
 class PathGeneration():
     def __init__(self):
         self.trajectory = TrajectoryProfile()
-        
+
     def generate_synced_trajectory(self,path, vmax=0.5, amax=0.5, dt=0.01):
 
         L_pos = path.path_length
@@ -50,10 +50,12 @@ class PathGeneration():
 
         L_max = max(L_pos, L_ori)
 
-        t_list, s_base, T = self.trajectory.trapezoid_time_scaled(L_max, vmax, amax, dt)
+        t_list, s_all, T = self.trajectory.trapezoid_multi(
+            [L_pos, L_ori], vmax, amax, dt
+        )
 
-        s_pos = s_base * (L_pos / L_max)
-        s_ori = s_base * (L_ori / L_max)
+        s_pos = s_all[0]
+        s_ori = s_all[1]
 
         trajectory = []
 

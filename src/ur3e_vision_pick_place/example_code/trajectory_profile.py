@@ -3,6 +3,7 @@ import numpy as np
 class TrajectoryProfile:
     def __init__(self):
         pass
+
     def trapezoid_time_scaled(self, L, vmax, amax, dt):
         t_acc = vmax / amax
         d_acc = 0.5 * amax * t_acc**2
@@ -34,3 +35,21 @@ class TrajectoryProfile:
             t += dt
 
         return np.array(t_list), np.array(s_list), t_total
+    
+    def trapezoid_multi(self, L_array, vmax, amax, dt):
+        L_array = np.array(L_array)
+        L_max = np.max(L_array)
+
+        # Base trapezoid
+        t_list, s_base, T = self.trapezoid_time_scaled(L_max, vmax, amax, dt)
+
+        # Scale for each dimension
+        s_scaled = []
+
+        for L in L_array:
+            if L > 1e-8:
+                s_scaled.append(s_base * (L / L_max))
+            else:
+                s_scaled.append(np.zeros_like(s_base))
+
+        return t_list, np.array(s_scaled), T
