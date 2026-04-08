@@ -37,6 +37,7 @@ setup(
             'trapezoidal_planner = ur3e_vision_pick_place.trapezoidal_planner:main',
             'forward_kinematics = ur3e_vision_pick_place.forward_kinematics:main',
             'forward_kinematics_pure = ur3e_vision_pick_place.forward_kinematics_pure:main',
+            'inverse_kinematics = ur3e_vision_pick_place.inverse_kinematics:main',
         ],
     },
 )

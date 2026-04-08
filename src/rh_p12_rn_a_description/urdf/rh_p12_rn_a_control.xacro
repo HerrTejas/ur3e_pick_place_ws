@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="rh_p12_rn_a_system" params="name prefix">
+
+    <ros2_control name="GazeboSystem" type="system">
+
+        <hardware>
+            <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+        </hardware>
+
+        <joint name="${prefix}rh_r1_joint">
+            <command_interface name="position"/>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+            <state_interface name="effort"/>
+            <state_interface name="torque_enable"/>
+            <state_interface name="hardware_state"/>
+        </joint>
+
+        <joint name="${prefix}rh_r2">
+            <param name="mimic">${prefix}rh_r1_joint</param>
+            <param name="multiplier">1</param>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+            <state_interface name="effort"/>
+            <state_interface name="torque_enable"/>
+            <state_interface name="hardware_state"/>
+        </joint>
+        <joint name="${prefix}rh_l1">
+            <param name="mimic">${prefix}rh_r1_joint</param>
+            <param name="multiplier">1</param>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+            <state_interface name="effort"/>
+            <state_interface name="torque_enable"/>
+            <state_interface name="hardware_state"/>
+        </joint>
+        <joint name="${prefix}rh_l2">
+            <param name="mimic">${prefix}rh_r1_joint</param>
+            <param name="multiplier">1</param>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+            <state_interface name="effort"/>
+            <state_interface name="torque_enable"/>
+            <state_interface name="hardware_state"/>
+        </joint>
+
+    </ros2_control>
+
+  </xacro:macro>
+
+</robot>

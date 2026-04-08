@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- rh_p12_rn_a gripper -->
+<robot name="rh_p12_rn_a" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="prefix" default="" />
+
+  <xacro:include filename="$(find rh_p12_rn_a_description)/urdf/materials.xacro" />
+  <xacro:include filename="$(find rh_p12_rn_a_description)/urdf/rh_p12_rn_a_gripper.xacro" />
+  <xacro:include filename="$(find rh_p12_rn_a_description)/urdf/rh_p12_rn_a.gazebo" />
+  <xacro:include filename="$(find rh_p12_rn_a_description)/urdf/rh_p12_rn_a_control.xacro" />
+
+  <xacro:rh_p12_rn_a_gripper prefix="$(arg prefix)" />
+
+  <xacro:rh_p12_rn_a_gazebo prefix="$(arg prefix)" />
+
+  <xacro:rh_p12_rn_a_system name="GazeboSystem" prefix="$(arg prefix)"/>
+
+
+  <!-- Global reference link -->
+  <link name="world"/>
+
+  <!-- Used for fixing robot to the UR3e -->
+  <joint name="world_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="world"/>
+    <child link="$(arg prefix)rh_p12_rn_base"/>
+  </joint>
+
+  <gazebo>
+    <plugin
+        filename="gz-sim-joint-state-publisher-system"
+        name="gz::sim::systems::JointStatePublisher">
+        <topic>joint_states</topic>
+        <joint_name>$(arg prefix)rh_r1_joint</joint_name>
+        <joint_name>$(arg prefix)rh_r2</joint_name>
+        <joint_name>$(arg prefix)rh_l1</joint_name>
+        <joint_name>$(arg prefix)rh_l2</joint_name>
+    </plugin>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find rh_p12_rn_a_gazebo)/config/position_controller.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+
+</robot>
