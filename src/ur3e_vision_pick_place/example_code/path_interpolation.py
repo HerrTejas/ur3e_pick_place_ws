@@ -27,7 +27,7 @@ class PathInterpolation:
 
     def interpolate(self, t):
 
-        pos = (1 - t) * self.start_pose[:3] + t * self.end_pose[:3]
+        pos = (1 - t) * self.start_pose[:3] + t * self.end_pose[:3]  
 
         times = [0, 1]
         rots = R.concatenate([self.r1, self.r2])
