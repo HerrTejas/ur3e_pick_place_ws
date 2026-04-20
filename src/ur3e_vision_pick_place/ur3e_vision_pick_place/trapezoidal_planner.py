@@ -108,7 +108,6 @@ class TrapezoidalPlanner(Node):
         self.HOME = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
         self.RED_BOX_GRASP = [1.255, -0.98, 1.4, -1.8, -1.61, -0.3]
 
-        self.duration = 3.0
         self.dt = 0.1
         self.current_positions = None
 
@@ -132,30 +131,57 @@ class TrapezoidalPlanner(Node):
             return
         self.move_to(list(msg.data))
 
+    def wrap_angle(self, angle):
+        """Wrap angle to [-pi, pi]."""
+        return (angle + np.pi) % (2 * np.pi) - np.pi
+
+    def shortest_angular_distance(self, start, end):
+        """
+        Compute the shortest distance between two angles.
+        Returns a signed value: positive = counter-clockwise, negative = clockwise.
+        This prevents the robot from spinning the long way around.
+        """
+        diff = self.wrap_angle(end - start)
+        return diff
+
     def move_to(self, target):
         """
         Compute and execute trapezoidal trajectory to target position.
 
-        Trapezoidal Profile (25% accel, 50% cruise, 25% decel):
-
-            Velocity
-                ^
-           Vmax |      ___________
-                |     /           \\
-                |    /             \\
-                |___/               \\___
-                0  T/4    3T/4      T
+        Fixes:
+        - Wraps angles to [-pi, pi] to prevent spinning
+        - Uses shortest angular path for each joint
+        - Scales duration based on largest joint movement
         """
         if self.current_positions is None:
             self.get_logger().error('No joint states yet!')
             return
 
-        self.get_logger().info(f'Moving to: {[f"{x:.2f}" for x in target]}')
+        # Wrap current positions and targets to [-pi, pi]
+        start = [self.wrap_angle(p) for p in self.current_positions]
+        target = [self.wrap_angle(t) for t in target]
 
-        t_accel = self.duration * 0.25
-        t_cruise = self.duration * 0.50
-        times = np.arange(0, self.duration + self.dt, self.dt)
+        # Compute shortest angular distance for each joint
+        deltas = [self.shortest_angular_distance(start[j], target[j]) for j in range(6)]
 
+        # Compute effective end positions using shortest path
+        # (start + delta gives the target via the short route)
+        end = [start[j] + deltas[j] for j in range(6)]
+
+        # Scale duration based on the largest joint movement
+        # Max speed ~0.8 rad/s, minimum 2 seconds
+        max_distance = max(abs(d) for d in deltas)
+        duration = max(3.0, max_distance / 0.5)
+
+        self.get_logger().info(f'Moving to: {[f"{t:.2f}" for t in target]}')
+        self.get_logger().info(f'Duration: {duration:.2f}s, max joint move: {max_distance:.2f} rad')
+
+        # Time parameters
+        t_accel = duration * 0.25
+        t_cruise = duration * 0.50
+        times = np.arange(0, duration + self.dt, self.dt)
+
+        # Build trajectory
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
 
@@ -163,34 +189,34 @@ class TrapezoidalPlanner(Node):
             point = JointTrajectoryPoint()
 
             for j in range(6):
-                start = self.current_positions[j]
-                end = target[j]
-                distance = abs(end - start)
-                direction = 1 if end > start else -1
+                s = start[j]
+                e = end[j]
+                distance = abs(deltas[j])
+                direction = 1 if deltas[j] > 0 else -1
 
                 if distance < 1e-6:
-                    point.positions.append(start)
+                    point.positions.append(s)
                     point.velocities.append(0.0)
                     continue
 
-                v_max = distance / (0.75 * self.duration)
+                v_max = distance / (0.75 * duration)
                 accel = v_max / t_accel
 
                 if t <= t_accel:
                     vel = accel * t
-                    pos = start + direction * 0.5 * accel * t ** 2
+                    pos = s + direction * 0.5 * accel * t ** 2
                 elif t <= t_accel + t_cruise:
                     t_c = t - t_accel
                     d_accel = 0.5 * accel * t_accel ** 2
                     vel = v_max
-                    pos = start + direction * (d_accel + v_max * t_c)
+                    pos = s + direction * (d_accel + v_max * t_c)
                 else:
                     t_d = t - t_accel - t_cruise
                     d_accel = 0.5 * v_max * t_accel
                     d_cruise = v_max * t_cruise
                     d_decel = v_max * t_d - 0.5 * accel * t_d ** 2
                     vel = v_max - accel * t_d
-                    pos = start + direction * (d_accel + d_cruise + d_decel)
+                    pos = s + direction * (d_accel + d_cruise + d_decel)
 
                 point.positions.append(pos)
                 point.velocities.append(direction * max(0, vel))

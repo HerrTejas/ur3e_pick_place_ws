@@ -38,7 +38,9 @@ setup(
             'forward_kinematics = ur3e_vision_pick_place.forward_kinematics:main',
             'forward_kinematics_pure = ur3e_vision_pick_place.forward_kinematics_pure:main',
             'inverse_kinematics = ur3e_vision_pick_place.inverse_kinematics:main',
-            'path_interpolator = ur3e_vision_pick_place.path_interpolation:main'
+            'path_interpolator = ur3e_vision_pick_place.path_interpolation:main',
+            'object_detector = ur3e_vision_pick_place.object_detector:main',
+            'frame_transformer = ur3e_vision_pick_place.frame_transformer:main',
         ],
     },
 )

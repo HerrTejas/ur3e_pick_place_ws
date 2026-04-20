@@ -51,8 +51,8 @@ class PathInterpolation(Node):
         self.profile = TrajectoryProfile()
 
         # Profile parameters
-        self.vmax = 0.5
-        self.amax = 0.5
+        self.vmax = 0.3
+        self.amax = 0.3
         self.dt = 0.05
 
         # State
