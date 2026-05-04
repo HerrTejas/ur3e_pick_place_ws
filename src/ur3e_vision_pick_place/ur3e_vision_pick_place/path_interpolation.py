@@ -3,15 +3,9 @@
 Path Interpolation Node — Cartesian Space
 
 Linear position + SLERP orientation, time-scaled with
-trapezoidal profile. IK converts each waypoint to joints.
-
-No code duplication:
-  - IK math imported from inverse_kinematics.py
-  - Trapezoid math imported from trapezoidal_planner.py
-  - Current EE pose read from FK node via /end_effector_pose topic
-
-Input:  /path_target_pose (PoseStamped)
-Output: JointTrajectory to controller
+trapezoidal profile on POSITION DISTANCE ONLY.
+Orientation follows the same time parameter via SLERP —
+never dominates timing, always synchronized.
 
 Author: Tejas
 """
@@ -25,7 +19,6 @@ from builtin_interfaces.msg import Duration
 import numpy as np
 from scipy.spatial.transform import Rotation as R, Slerp
 
-# Import math from existing nodes — no duplication
 from ur3e_vision_pick_place.inverse_kinematics import load_pinocchio, compute_ik
 from ur3e_vision_pick_place.trapezoidal_planner import TrajectoryProfile
 
@@ -39,7 +32,6 @@ class PathInterpolation(Node):
             'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
         ]
 
-        # Load Pinocchio (same function IK node uses)
         try:
             self.model, self.data, self.ee_frame_id = load_pinocchio()
             self.get_logger().info(f'Pinocchio loaded: {self.model.name}')
@@ -47,30 +39,29 @@ class PathInterpolation(Node):
             self.get_logger().error(f'Failed to load URDF: {e}')
             return
 
-        # Trapezoid profile (same class trapezoidal_planner uses)
         self.profile = TrajectoryProfile()
 
         # Profile parameters
-        self.vmax = 0.3
-        self.amax = 0.3
+        self.vmax = 0.2
+        self.amax = 0.2
         self.dt = 0.05
+
+        # Duration scaling: t = max(t_min, duration_scale * distance)
+        self.t_min = 2.0
+        self.duration_scale = 10.0
 
         # State
         self.current_pose = None
         self.current_q = np.zeros(6)
         self.joints_received = False
 
-        # Sub: current EE pose from FK node
         self.create_subscription(
             PoseStamped, '/end_effector_pose', self.ee_pose_cb, 10)
-        # Sub: current joints for IK seed
         self.create_subscription(
             JointState, '/joint_states', self.joint_state_cb, 10)
-        # Sub: target pose
         self.create_subscription(
             PoseStamped, '/path_target_pose', self.target_cb, 10)
 
-        # Pub: trajectory to controller
         self.traj_pub = self.create_publisher(
             JointTrajectory,
             '/scaled_joint_trajectory_controller/joint_trajectory', 10)
@@ -80,8 +71,6 @@ class PathInterpolation(Node):
         self.get_logger().info('  IK from: inverse_kinematics.compute_ik()')
         self.get_logger().info('  Profile from: trapezoidal_planner.TrajectoryProfile')
         self.get_logger().info('  Send target to: /path_target_pose')
-
-    # ── Callbacks ─────────────────────────────────────────────────
 
     def ee_pose_cb(self, msg):
         self.current_pose = msg
@@ -105,10 +94,8 @@ class PathInterpolation(Node):
             return
         self.plan_and_execute(msg)
 
-    # ── Planning ──────────────────────────────────────────────────
-
     def plan_and_execute(self, target_msg):
-        # Start pose (from FK node topic)
+        # Start pose (from FK node)
         sp = self.current_pose.pose
         start_pos = np.array([sp.position.x, sp.position.y, sp.position.z])
         r_start = R.from_quat([
@@ -122,47 +109,75 @@ class PathInterpolation(Node):
             ep.orientation.x, ep.orientation.y,
             ep.orientation.z, ep.orientation.w])
 
-        # Path lengths
+        # Distances
         L_pos = np.linalg.norm(end_pos - start_pos)
         L_ori = (r_start.inv() * r_end).magnitude()
 
         self.get_logger().info(f'Position distance: {L_pos:.4f} m')
         self.get_logger().info(f'Orientation distance: {L_ori:.4f} rad')
 
-        if max(L_pos, L_ori) < 1e-6:
+        if L_pos < 1e-6 and L_ori < 1e-6:
             self.get_logger().info('Already at target.')
             return
 
-        # Synchronized trapezoidal profile
-        t_array, s_scaled, _ = self.profile.trapezoid_multi(
-            [L_pos, L_ori], self.vmax, self.amax, self.dt)
+        # Choose primary distance for time-scaling
+        # Position controls timing. Orientation just follows via SLERP.
+        # If position is ~zero (pure rotation), use orientation instead.
+        if L_pos > 1e-6:
+            L_primary = L_pos
+        else:
+            L_primary = L_ori
 
-        s_pos = s_scaled[0]
-        s_ori = s_scaled[1]
+        # Desired duration: proportional to distance, with minimum
+        desired_duration = max(self.t_min, self.duration_scale * L_primary)
+
+        # Scale vmax/amax if profile would be too short
+        # Check: L / vmax is roughly the cruise-phase time
+        if L_primary / self.vmax < desired_duration * 0.75:
+            vmax = L_primary / (desired_duration * 0.75)
+            amax = vmax / (desired_duration * 0.25)
+        else:
+            vmax = self.vmax
+            amax = self.amax
+
+        # Generate trapezoidal profile on primary distance only
+        t_array, s_array, t_total = self.profile.trapezoid_time_scaled(
+            L_primary, vmax, amax, self.dt)
 
         self.get_logger().info(
-            f'Trajectory: {len(t_array)} waypoints, {t_array[-1]:.2f}s')
+            f'Trajectory: {len(t_array)} waypoints, {t_total:.2f}s')
 
         # Setup SLERP
         rots = R.concatenate([r_start, r_end])
         slerp = Slerp([0.0, 1.0], rots)
 
-        # Interpolate + IK
+        # Build trajectory
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
+
+        # First point: current joints exactly, velocity = 0
+        first_point = JointTrajectoryPoint()
+        first_point.positions = self.current_q[:6].tolist()
+        first_point.velocities = [0.0] * 6
+        first_point.time_from_start = Duration(sec=0, nanosec=0)
+        traj_msg.points.append(first_point)
+
         q_seed = self.current_q.copy()
         ik_failures = 0
 
         for i in range(len(t_array)):
-            t_pos = (s_pos[i] / L_pos) if L_pos > 1e-6 else 0.0
-            t_ori = (s_ori[i] / L_ori) if L_ori > 1e-6 else 0.0
-            t_interp = min(max(t_pos, t_ori), 1.0)
+            if i == 0:
+                continue
 
-            # Cartesian interpolation: linear pos + SLERP orientation
+            # Single normalized parameter: 0 → 1
+            # Position and orientation both use this same parameter
+            t_interp = min(s_array[i] / L_primary, 1.0) if L_primary > 1e-6 else 1.0
+
+            # Interpolate position (linear) and orientation (SLERP)
             pos = (1.0 - t_interp) * start_pos + t_interp * end_pos
             r_interp = slerp(t_interp)
 
-            # IK (same function the IK node uses)
+            # IK
             q_sol = compute_ik(
                 self.model, self.data, self.ee_frame_id,
                 pos, r_interp.as_matrix(), q_seed)
@@ -177,6 +192,8 @@ class PathInterpolation(Node):
 
             q_seed = q_sol.copy()
 
+            #check if norm is greater than 1 and return
+
             point = JointTrajectoryPoint()
             point.positions = q_sol.tolist()
             t = t_array[i]
@@ -184,8 +201,8 @@ class PathInterpolation(Node):
                 sec=int(t), nanosec=int((t - int(t)) * 1e9))
             traj_msg.points.append(point)
 
-        if not traj_msg.points:
-            self.get_logger().error('No valid waypoints!')
+        if len(traj_msg.points) < 2:
+            self.get_logger().error('Not enough valid waypoints!')
             return
 
         self.traj_pub.publish(traj_msg)

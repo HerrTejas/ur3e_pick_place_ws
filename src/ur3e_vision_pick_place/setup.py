@@ -41,6 +41,8 @@ setup(
             'path_interpolator = ur3e_vision_pick_place.path_interpolation:main',
             'object_detector = ur3e_vision_pick_place.object_detector:main',
             'frame_transformer = ur3e_vision_pick_place.frame_transformer:main',
+            'pick_and_place_controller = ur3e_vision_pick_place.pick_and_place_controller:main',
+            'gui_node = ur3e_vision_pick_place.gui_node:main'
         ],
     },
 )

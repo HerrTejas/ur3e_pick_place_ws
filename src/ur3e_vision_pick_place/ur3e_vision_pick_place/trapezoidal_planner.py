@@ -145,43 +145,36 @@ class TrapezoidalPlanner(Node):
         return diff
 
     def move_to(self, target):
-        """
-        Compute and execute trapezoidal trajectory to target position.
-
-        Fixes:
-        - Wraps angles to [-pi, pi] to prevent spinning
-        - Uses shortest angular path for each joint
-        - Scales duration based on largest joint movement
-        """
         if self.current_positions is None:
             self.get_logger().error('No joint states yet!')
             return
 
-        # Wrap current positions and targets to [-pi, pi]
-        start = [self.wrap_angle(p) for p in self.current_positions]
-        target = [self.wrap_angle(t) for t in target]
+        self.get_logger().info(f'Moving to: {[f"{x:.2f}" for x in target]}')
 
-        # Compute shortest angular distance for each joint
-        deltas = [self.shortest_angular_distance(start[j], target[j]) for j in range(6)]
+        # DON'T wrap start — keep the actual controller position
+        # Only wrap for computing the shortest delta
+        start = list(self.current_positions)
+        start_wrapped = [self.wrap_angle(s) for s in start]
+        target_wrapped = [self.wrap_angle(t) for t in target]
 
-        # Compute effective end positions using shortest path
-        # (start + delta gives the target via the short route)
+        # Compute shortest angular distance using wrapped values
+        deltas = [self.shortest_angular_distance(start_wrapped[j], target_wrapped[j])
+                  for j in range(6)]
+
+        # Apply delta to ORIGINAL (unwrapped) start
+        # This keeps the trajectory continuous with the controller's state
         end = [start[j] + deltas[j] for j in range(6)]
 
-        # Scale duration based on the largest joint movement
-        # Max speed ~0.8 rad/s, minimum 2 seconds
+        # Scale duration based on largest movement
         max_distance = max(abs(d) for d in deltas)
-        duration = max(3.0, max_distance / 0.5)
+        duration = max(4.0, max_distance / 0.3)
 
-        self.get_logger().info(f'Moving to: {[f"{t:.2f}" for t in target]}')
-        self.get_logger().info(f'Duration: {duration:.2f}s, max joint move: {max_distance:.2f} rad')
+        self.get_logger().info(f'Duration: {duration:.2f}s, max move: {max_distance:.2f} rad')
 
-        # Time parameters
         t_accel = duration * 0.25
         t_cruise = duration * 0.50
         times = np.arange(0, duration + self.dt, self.dt)
 
-        # Build trajectory
         traj_msg = JointTrajectory()
         traj_msg.joint_names = self.joint_names
 
