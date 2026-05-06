@@ -115,7 +115,7 @@ class TrapezoidalPlanner(Node):
         self.create_subscription(Float64MultiArray, '/cmd_joint_positions', self.cmd_cb, 10)
 
         self.traj_pub = self.create_publisher(
-            JointTrajectory, '/scaled_joint_trajectory_controller/joint_trajectory', 10)
+            JointTrajectory, '/joint_trajectory_controller/joint_trajectory', 10)
 
     def joint_state_cb(self, msg):
         positions = {}

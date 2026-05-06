@@ -54,9 +54,43 @@ def generate_launch_description():
         output='screen'
     )
 
+        # ---------- Custom Nodes ----------
+
+    path_interpolator = Node(
+        package='ur3e_vision_pick_place',
+        executable='path_interpolator',
+        name='path_interpolator',
+        output='screen'
+    )
+
+    forward_kinematics = Node(
+        package='ur3e_vision_pick_place',
+        executable='forward_kinematics',
+        name='forward_kinematics',
+        output='screen'
+    )
+
+    trapezoidal_planner = Node(
+        package='ur3e_vision_pick_place',
+        executable='trapezoidal_planner',
+        name='trapezoidal_planner',
+        output='screen'
+    )
+
+    gui_node = Node(
+        package='ur3e_vision_pick_place',
+        executable='gui_node',
+        name='gui_node',
+        output='screen'
+    )
+
     return LaunchDescription([
         world_file_arg,
         ur_type_arg,
         ur_simulation,
         gz_bridge,
+        path_interpolator,
+        forward_kinematics,
+        trapezoidal_planner,
+        gui_node
     ])

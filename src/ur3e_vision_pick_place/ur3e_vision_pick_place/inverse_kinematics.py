@@ -25,7 +25,7 @@ from std_msgs.msg import Float64MultiArray
 #  Pure math — no ROS, importable by any node
 # ══════════════════════════════════════════════════════════════════
 
-def load_pinocchio(urdf_path="/tmp/ur3e.urdf", ee_frame="tool0"):
+def load_pinocchio(urdf_path, ee_frame="tool0"):
     """Load Pinocchio model. Returns (model, data, ee_frame_id)."""
     model = pin.buildModelFromUrdf(urdf_path)
     data = model.createData()
@@ -33,53 +33,151 @@ def load_pinocchio(urdf_path="/tmp/ur3e.urdf", ee_frame="tool0"):
     return model, data, ee_frame_id
 
 
+# def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
+#                q_seed, max_iter=200, tol=1e-4, damping=1e-6):
+#     """
+#     Damped least-squares IK.
+
+#     Args:
+#         model, data, ee_frame_id: from load_pinocchio()
+#         target_pos:  (3,) desired position
+#         target_rot:  (3,3) desired rotation matrix
+#         q_seed:      (6,) initial guess
+#         max_iter:    max iterations
+#         tol:         convergence tolerance
+#         damping:     damping factor
+
+#     Returns:
+#         (6,) joint angles or None if failed
+#     """
+#     print("================== Target Pose: ",target_pos," ================== \n")
+#     target_se3 = pin.SE3(target_rot, target_pos)
+
+#     q = np.zeros(model.nq)
+#     q[:6] = q_seed[:6]
+
+#     for i in range(max_iter):
+#         pin.forwardKinematics(model, data, q)
+#         pin.updateFramePlacements(model, data)
+
+#         current_se3 = data.oMf[ee_frame_id]
+#         error = pin.log6(current_se3.inverse() * target_se3).vector
+#         error_norm = np.linalg.norm(error)
+
+#         if error_norm < tol:
+#             return q[:6].copy()
+
+#         J = pin.computeFrameJacobian(
+#             model, data, q, ee_frame_id,
+#             pin.ReferenceFrame.LOCAL
+#         )
+#         J_arm = J[:, :6]
+
+#         JtJ = J_arm.T @ J_arm + damping * np.eye(6)
+#         delta_q = np.linalg.solve(JtJ, J_arm.T @ error)
+#         q[:6] += delta_q
+#         q[:6] = (q[:6] + np.pi) % (2 * np.pi) - np.pi  # wrap to [-pi, pi]
+
+#     # Return best effort if close enough
+#     if error_norm < 0.01:
+#         return q[:6].copy()
+#     return None
+
+def unwrap_solution(q_sol, q_seed):
+    """
+    Adjust q_sol so each joint takes the shortest path from q_seed.
+    Handles the arctan2 wraparound on continuous joints like wrist_3.
+    """
+    q_out = q_sol.copy()
+    for i in range(len(q_sol)):
+        diff = q_sol[i] - q_seed[i]
+        # If the jump is > pi, go the other way around
+        if diff > np.pi:
+            q_out[i] -= 2 * np.pi
+        elif diff < -np.pi:
+            q_out[i] += 2 * np.pi
+    return q_out
+
 def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
-               q_seed, max_iter=200, tol=1e-4, damping=1e-6):
-    """
-    Damped least-squares IK.
+               q_seed, max_iter=500, tol=1e-4, damping=1e-3):
 
-    Args:
-        model, data, ee_frame_id: from load_pinocchio()
-        target_pos:  (3,) desired position
-        target_rot:  (3,3) desired rotation matrix
-        q_seed:      (6,) initial guess
-        max_iter:    max iterations
-        tol:         convergence tolerance
-        damping:     damping factor
+    arm_joint_names = [
+        'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+        'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+    ]
 
-    Returns:
-        (6,) joint angles or None if failed
-    """
+    # Get q and v indices for each arm joint
+    q_idx = []
+    v_idx = []
+    for name in arm_joint_names:
+        jid = model.getJointId(name)
+        jm = model.joints[jid]
+        q_idx.append(jm.idx_q)
+        v_idx.append(jm.idx_v)
+    q_idx = np.array(q_idx)
+    v_idx = np.array(v_idx)
+
     target_se3 = pin.SE3(target_rot, target_pos)
 
-    q = np.zeros(model.nq)
-    q[:6] = q_seed[:6]
+    # Seed using pin.integrate so wrist_3 cos/sin is set correctly
+    q = pin.neutral(model)
+    dq0 = np.zeros(model.nv)
+    dq0[v_idx] = q_seed[:6]
+    q = pin.integrate(model, q, dq0)
+
+    alpha = 0.5
+    W = np.diag([1.0, 1.0, 1.0, 0.3, 0.3, 0.3])
+    best_error = np.inf
+    best_q6 = q_seed[:6].copy()
 
     for i in range(max_iter):
         pin.forwardKinematics(model, data, q)
         pin.updateFramePlacements(model, data)
-
         current_se3 = data.oMf[ee_frame_id]
-        error = pin.log6(current_se3.inverse() * target_se3).vector
-        error_norm = np.linalg.norm(error)
 
-        if error_norm < tol:
-            return q[:6].copy()
+        try:
+            error = pin.log6(target_se3 * current_se3.inverse()).vector
+        except Exception:
+            return None
 
-        J = pin.computeFrameJacobian(
-            model, data, q, ee_frame_id,
-            pin.ReferenceFrame.LOCAL
-        )
-        J_arm = J[:, :6]
+        if not np.isfinite(error).all():
+            return None
 
-        JtJ = J_arm.T @ J_arm + damping * np.eye(6)
-        delta_q = np.linalg.solve(JtJ, J_arm.T @ error)
-        q[:6] += delta_q
-        q[:6] = (q[:6] + np.pi) % (2 * np.pi) - np.pi  # wrap to [-pi, pi]
+        err_norm = np.linalg.norm(error)
 
-    # Return best effort if close enough
-    if error_norm < 0.01:
-        return q[:6].copy()
+        if err_norm < best_error:
+            best_error = err_norm
+            # wrist_3 is continuous joint: q has (cos,sin), extract angle via arctan2
+            q6 = np.zeros(6)
+            for k, (qi, vi) in enumerate(zip(q_idx, v_idx)):
+                jid = model.getJointId(arm_joint_names[k])
+                nq_j = model.joints[jid].nq
+                if nq_j == 1:
+                    q6[k] = q[qi]           # normal revolute
+                else:
+                    q6[k] = np.arctan2(q[qi + 1], q[qi])  # continuous: (cos,sin)
+            best_q6 = q6.copy()
+
+        if err_norm < tol:
+            return unwrap_solution(best_q6.copy(), q_seed[:6])
+
+        J_full = pin.computeFrameJacobian(model, data, q, ee_frame_id,
+                                          pin.ReferenceFrame.WORLD)
+        J = J_full[:, v_idx]
+
+        Wt = W @ J
+        We = W @ error
+        dv = Wt.T @ np.linalg.solve(Wt @ Wt.T + damping * np.eye(6), We)
+
+        full_dv = np.zeros(model.nv)
+        full_dv[v_idx] = alpha * dv
+        q = pin.integrate(model, q, full_dv)
+
+        if np.linalg.norm(dv) < 1e-7:
+            break
+
+    if best_error < 0.05:
+        return unwrap_solution(best_q6.copy(), q_seed[:6])
     return None
 
 

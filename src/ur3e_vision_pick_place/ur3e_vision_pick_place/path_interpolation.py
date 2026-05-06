@@ -24,10 +24,14 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 import numpy as np
 from scipy.spatial.transform import Rotation as R, Slerp
+from ament_index_python.packages import get_package_share_directory
+import os
+import subprocess
 
 # Import math from existing nodes — no duplication
 from ur3e_vision_pick_place.inverse_kinematics import load_pinocchio, compute_ik
 from ur3e_vision_pick_place.trapezoidal_planner import TrajectoryProfile
+from ur3e_vision_pick_place.inverse_kinematics import unwrap_solution
 
 
 class PathInterpolation(Node):
@@ -39,9 +43,23 @@ class PathInterpolation(Node):
             'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
         ]
 
+        pkg_path = get_package_share_directory("ur_description")
+
+        xacro_path = os.path.join(pkg_path, "urdf", "ur.urdf.xacro")
+        urdf_path = "/tmp/ur3e.urdf"
+
+        # Convert xacro → urdf
+        subprocess.run([
+            "xacro",
+            xacro_path,
+            "name:=ur",
+            "ur_type:=ur3e",
+            "prefix:=",
+        ], stdout=open(urdf_path, "w"), check=True)
+
         # Load Pinocchio (same function IK node uses)
         try:
-            self.model, self.data, self.ee_frame_id = load_pinocchio()
+            self.model, self.data, self.ee_frame_id = load_pinocchio(urdf_path)
             self.get_logger().info(f'Pinocchio loaded: {self.model.name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load URDF: {e}')
@@ -73,7 +91,7 @@ class PathInterpolation(Node):
         # Pub: trajectory to controller
         self.traj_pub = self.create_publisher(
             JointTrajectory,
-            '/scaled_joint_trajectory_controller/joint_trajectory', 10)
+            '/joint_trajectory_controller/joint_trajectory', 10)
 
         self.get_logger().info('Path Interpolation Node Ready!')
         self.get_logger().info('  FK pose from: /end_effector_pose')
@@ -105,9 +123,24 @@ class PathInterpolation(Node):
             return
         self.plan_and_execute(msg)
 
+
+    # Poll /joint_states until actual position matches expected goal, THEN seed IK
+
+    def wait_for_settle(self, goal_q, timeout=5.0, tol=0.05):
+        start = self.get_clock().now()
+        while (self.get_clock().now() - start).nanoseconds < timeout * 1e9:
+            if np.allclose(self.current_q[:6], goal_q, atol=tol):
+                return True
+            rclpy.spin_once(self, timeout_sec=0.05)  # ✅ lets callbacks fire
+        self.get_logger().warn('Settle timeout — proceeding anyway')
+        return False
+
+
     # ── Planning ──────────────────────────────────────────────────
 
     def plan_and_execute(self, target_msg):
+        self.wait_for_settle(self.current_q.copy())
+
         # Start pose (from FK node topic)
         sp = self.current_pose.pose
         start_pos = np.array([sp.position.x, sp.position.y, sp.position.z])
@@ -162,6 +195,7 @@ class PathInterpolation(Node):
             pos = (1.0 - t_interp) * start_pos + t_interp * end_pos
             r_interp = slerp(t_interp)
 
+            # In path_interpolator, before computing IK:
             # IK (same function the IK node uses)
             q_sol = compute_ik(
                 self.model, self.data, self.ee_frame_id,
@@ -175,6 +209,7 @@ class PathInterpolation(Node):
                     return
                 continue
 
+            q_sol = unwrap_solution(q_sol, q_seed)
             q_seed = q_sol.copy()
 
             point = JointTrajectoryPoint()
