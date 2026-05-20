@@ -86,16 +86,14 @@ def load_pinocchio(urdf_path, ee_frame="tool0"):
 def unwrap_solution(q_sol, q_seed):
     """
     Adjust q_sol so each joint takes the shortest path from q_seed.
-    Handles the arctan2 wraparound on continuous joints like wrist_3.
+    Handles arbitrary 2π multiples for continuous joints like wrist_3.
     """
     q_out = q_sol.copy()
     for i in range(len(q_sol)):
         diff = q_sol[i] - q_seed[i]
-        # If the jump is > pi, go the other way around
-        if diff > np.pi:
-            q_out[i] -= 2 * np.pi
-        elif diff < -np.pi:
-            q_out[i] += 2 * np.pi
+        # Subtract the nearest 2πk to minimise |diff|
+        n = round(diff / (2 * np.pi))
+        q_out[i] -= n * 2 * np.pi
     return q_out
 
 def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
@@ -126,17 +124,29 @@ def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
     q = pin.integrate(model, q, dq0)
 
     alpha = 0.5
-    W = np.diag([1.0, 1.0, 1.0, 0.3, 0.3, 0.3])
     best_error = np.inf
     best_q6 = q_seed[:6].copy()
+
+    # Adaptive seed-regularized DLS:
+    # mu is small while EE error is large (let solver converge freely),
+    # then ramps up once close to the target (locks solution near seed,
+    # preventing wrist drift to equivalent branches).
+    # mu_max=0.15 is only reached when err_norm < ~0.01 rad/m.
+    mu_max = 0.15
+    mu_start = 0.002
 
     for i in range(max_iter):
         pin.forwardKinematics(model, data, q)
         pin.updateFramePlacements(model, data)
         current_se3 = data.oMf[ee_frame_id]
 
+        # Standard Pinocchio LOCAL-frame IK (from official docs):
+        #   J_local maps q̇ → twist expressed in EE local frame
+        #   error = log6(current^{-1} * target) in the same local frame
+        # This pairing is correct by construction; WORLD-frame error with
+        # LOCAL Jacobian would require an adjoint transform and is error-prone.
         try:
-            error = pin.log6(target_se3 * current_se3.inverse()).vector
+            error = pin.log6(current_se3.inverse() * target_se3).vector
         except Exception:
             return None
 
@@ -145,29 +155,41 @@ def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
 
         err_norm = np.linalg.norm(error)
 
+        # Extract current arm angles for seed regularization
+        q_current_6 = np.zeros(6)
+        for k, (qi, vi) in enumerate(zip(q_idx, v_idx)):
+            jid = model.getJointId(arm_joint_names[k])
+            nq_j = model.joints[jid].nq
+            if nq_j == 1:
+                q_current_6[k] = q[qi]
+            else:
+                q_current_6[k] = np.arctan2(q[qi + 1], q[qi])
+
         if err_norm < best_error:
             best_error = err_norm
-            # wrist_3 is continuous joint: q has (cos,sin), extract angle via arctan2
-            q6 = np.zeros(6)
-            for k, (qi, vi) in enumerate(zip(q_idx, v_idx)):
-                jid = model.getJointId(arm_joint_names[k])
-                nq_j = model.joints[jid].nq
-                if nq_j == 1:
-                    q6[k] = q[qi]           # normal revolute
-                else:
-                    q6[k] = np.arctan2(q[qi + 1], q[qi])  # continuous: (cos,sin)
-            best_q6 = q6.copy()
+            best_q6 = q_current_6.copy()
 
         if err_norm < tol:
             return unwrap_solution(best_q6.copy(), q_seed[:6])
 
         J_full = pin.computeFrameJacobian(model, data, q, ee_frame_id,
-                                          pin.ReferenceFrame.WORLD)
+                                          pin.LOCAL)
         J = J_full[:, v_idx]
 
-        Wt = W @ J
-        We = W @ error
-        dv = Wt.T @ np.linalg.solve(Wt @ Wt.T + damping * np.eye(6), We)
+        # Seed error — always pull via shortest angular path
+        seed_err = q_seed[:6] - q_current_6
+        seed_err = seed_err - np.round(seed_err / (2 * np.pi)) * (2 * np.pi)
+
+        # mu ramps from mu_start → mu_max as err_norm falls from 1.0 → 0.0
+        # so it doesn't impede large-error convergence
+        mu = mu_start + (mu_max - mu_start) * max(0.0, 1.0 - err_norm)
+
+        # Seed-regularized DLS update
+        JtJ = J.T @ J
+        dv = np.linalg.solve(
+            JtJ + (damping + mu) * np.eye(6),
+            J.T @ error + mu * seed_err
+        )
 
         full_dv = np.zeros(model.nv)
         full_dv[v_idx] = alpha * dv
@@ -176,6 +198,10 @@ def compute_ik(model, data, ee_frame_id, target_pos, target_rot,
         if np.linalg.norm(dv) < 1e-7:
             break
 
+    import sys
+    print(f'[IK DEBUG] converged to best_error={best_error:.6f} (tol={tol}) '
+          f'target_pos={target_pos.round(4)} seed={np.round(q_seed[:6],3)}',
+          file=sys.stderr, flush=True)
     if best_error < 0.05:
         return unwrap_solution(best_q6.copy(), q_seed[:6])
     return None

@@ -67,11 +67,22 @@ class ForwardKinematics(Node):
         """Compute FK and publish end-effector pose."""
         if self.current_positions is None:
             return
-        
-        # Create joint array
-        q = np.zeros(self.model.nq)
-        for i in range(6):
-            q[i] = self.current_positions[i]
+
+        # Use pin.integrate from neutral so continuous joints (wrist_3) are
+        # stored correctly as (cos, sin) pairs — NOT as raw floats by index.
+        # Writing q[i] = angle directly is wrong when model.nq != model.nv.
+        q = pin.neutral(self.model)
+        # Build a velocity vector in tangent space and integrate once
+        joint_names_ordered = [
+            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+        ]
+        dq = np.zeros(self.model.nv)
+        for k, name in enumerate(joint_names_ordered):
+            jid = self.model.getJointId(name)
+            v_idx = self.model.joints[jid].idx_v
+            dq[v_idx] = self.current_positions[k]
+        q = pin.integrate(self.model, q, dq)
         
         # Compute FK
         pin.forwardKinematics(self.model, self.data, q)
