@@ -9,9 +9,9 @@ the ``target_color`` ROS2 parameter:
     2. Transform it to ``base_link`` with TF2 (same approach as
        frame_transformer.py) and attach the tested downward grasp
        orientation.
-    3. Solve IK (inverse_kinematics.compute_ik, seeded from the live
-       joint state) for a pre-grasp / grasp / lift waypoint above the
-       object.
+    3. Solve IK (helper_functions.kinematics.compute_ik, seeded from
+       the live joint state) for a pre-grasp / grasp / lift waypoint
+       above the object.
     4. Drive the arm + gripper through those waypoints via
        FollowJointTrajectory actions (same action-client pattern as
        pick_and_place.py), then place at that color's calibrated place
@@ -48,7 +48,7 @@ from geometry_msgs.msg import PointStamped
 import tf2_ros
 import tf2_geometry_msgs  # needed for buffer.transform() to work with geometry_msgs
 
-from ur3e_vision_pick_place.inverse_kinematics import compute_ik, load_pinocchio
+from ur3e_vision_pick_place.helper_functions.kinematics import compute_ik, load_pinocchio
 from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
 
 #: Downward-facing gripper orientation, tested with the red box grasp

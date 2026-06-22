@@ -129,6 +129,10 @@ ur3e_vision_pick_place/
 │   ├── gripper_camera.xacro
 │   └── gripper_camera.gazebo.xacro
 ├── ur3e_vision_pick_place/
+│   ├── helper_functions/        # pure math, no ROS — importable by any node
+│   │   ├── kinematics.py        # load_pinocchio, compute_fk, compute_ik
+│   │   ├── trajectory_profile.py  # TrajectoryProfile (trapezoidal profiles)
+│   │   └── dh_kinematics.py     # DH-parameter FK (cross-check)
 │   ├── robot_config.py
 │   ├── color_detector_v2.py
 │   ├── color_tuner.py

@@ -6,8 +6,8 @@ Linear position + SLERP orientation, time-scaled with
 trapezoidal profile. IK converts each waypoint to joints.
 
 No code duplication:
-  - IK math imported from inverse_kinematics.py
-  - Trapezoid math imported from trapezoidal_planner.py
+  - IK math imported from helper_functions/kinematics.py
+  - Trapezoid math imported from helper_functions/trajectory_profile.py
   - Current EE pose read from FK node via /end_effector_pose topic
 
 Input:  /path_target_pose (PoseStamped)
@@ -25,9 +25,9 @@ from builtin_interfaces.msg import Duration
 import numpy as np
 from scipy.spatial.transform import Rotation as R, Slerp
 
-# Import math from existing nodes — no duplication
-from ur3e_vision_pick_place.inverse_kinematics import load_pinocchio, compute_ik
-from ur3e_vision_pick_place.trapezoidal_planner import TrajectoryProfile
+# Import math from helper_functions — no duplication
+from ur3e_vision_pick_place.helper_functions.kinematics import load_pinocchio, compute_ik
+from ur3e_vision_pick_place.helper_functions.trajectory_profile import TrajectoryProfile
 from ur3e_vision_pick_place.robot_config import JOINT_NAMES
 
 
@@ -75,8 +75,8 @@ class PathInterpolation(Node):
 
         self.get_logger().info('Path Interpolation Node Ready!')
         self.get_logger().info('  FK pose from: /end_effector_pose')
-        self.get_logger().info('  IK from: inverse_kinematics.compute_ik()')
-        self.get_logger().info('  Profile from: trapezoidal_planner.TrajectoryProfile')
+        self.get_logger().info('  IK from: helper_functions.kinematics.compute_ik()')
+        self.get_logger().info('  Profile from: helper_functions.trajectory_profile.TrajectoryProfile')
         self.get_logger().info('  Send target to: /path_target_pose')
 
     # ── Callbacks ─────────────────────────────────────────────────
