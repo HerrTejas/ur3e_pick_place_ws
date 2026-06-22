@@ -28,16 +28,14 @@ from scipy.spatial.transform import Rotation as R, Slerp
 # Import math from existing nodes — no duplication
 from ur3e_vision_pick_place.inverse_kinematics import load_pinocchio, compute_ik
 from ur3e_vision_pick_place.trapezoidal_planner import TrajectoryProfile
+from ur3e_vision_pick_place.robot_config import JOINT_NAMES
 
 
 class PathInterpolation(Node):
     def __init__(self):
         super().__init__('path_interpolation')
 
-        self.joint_names = [
-            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-        ]
+        self.joint_names = JOINT_NAMES
 
         # Load Pinocchio (same function IK node uses)
         try:

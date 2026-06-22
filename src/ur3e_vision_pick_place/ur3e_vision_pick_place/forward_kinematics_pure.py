@@ -14,17 +14,16 @@ from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped
 import numpy as np
 
+from ur3e_vision_pick_place.robot_config import JOINT_NAMES
+
 
 class ForwardKinematicsPure(Node):
     def __init__(self):
         super().__init__('forward_kinematics_pure')
-        
+
         # Joint names
-        self.joint_names = [
-            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-        ]
-        
+        self.joint_names = JOINT_NAMES
+
         # UR3e DH Parameters: [d, a, alpha]
         self.dh_params = [
             [0.15185,    0,          np.pi/2 ],   # Joint 1

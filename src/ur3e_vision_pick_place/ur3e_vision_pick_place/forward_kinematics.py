@@ -15,26 +15,24 @@ from geometry_msgs.msg import PoseStamped
 import numpy as np
 import pinocchio as pin
 
+from ur3e_vision_pick_place.robot_config import EE_FRAME, JOINT_NAMES, URDF_PATH
+
 
 class ForwardKinematics(Node):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('forward_kinematics')
-        
+
         # Joint names
-        self.joint_names = [
-            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-        ]
-        
+        self.joint_names = JOINT_NAMES
+
         # Current joint positions
         self.current_positions = None
-        
+
         # Load Pinocchio model
-        urdf_path = "/tmp/ur3e.urdf"
         try:
-            self.model = pin.buildModelFromUrdf(urdf_path)
+            self.model = pin.buildModelFromUrdf(URDF_PATH)
             self.data = self.model.createData()
-            self.ee_frame_id = self.model.getFrameId("tool0")
+            self.ee_frame_id = self.model.getFrameId(EE_FRAME)
             self.get_logger().info(f'Loaded URDF: {self.model.name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load URDF: {e}')
@@ -53,7 +51,7 @@ class ForwardKinematics(Node):
         self.get_logger().info('Forward Kinematics Node Ready!')
         self.get_logger().info('Publishing to /end_effector_pose at 10 Hz')
     
-    def joint_state_cb(self, msg):
+    def joint_state_cb(self, msg: JointState) -> None:
         """ONLY store current joint positions."""
         positions = {}
         for i, name in enumerate(msg.name):
@@ -63,7 +61,7 @@ class ForwardKinematics(Node):
         if len(positions) == 6:
             self.current_positions = [positions[name] for name in self.joint_names]
     
-    def timer_cb(self):
+    def timer_cb(self) -> None:
         """Compute FK and publish end-effector pose."""
         if self.current_positions is None:
             return

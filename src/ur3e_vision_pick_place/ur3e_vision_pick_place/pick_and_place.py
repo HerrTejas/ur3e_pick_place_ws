@@ -12,6 +12,8 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 import time
 
+from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
+
 
 class PickAndPlace(Node):
     def __init__(self):
@@ -31,23 +33,15 @@ class PickAndPlace(Node):
         )
         
         # Joint names
-        self.arm_joints = [
-            'shoulder_pan_joint',
-            'shoulder_lift_joint',
-            'elbow_joint',
-            'wrist_1_joint',
-            'wrist_2_joint',
-            'wrist_3_joint'
-        ]
-        
-        self.gripper_joints = ['rh_r1_joint']
-        
+        self.arm_joints = JOINT_NAMES
+        self.gripper_joints = GRIPPER_JOINTS
+
         # ============================================
         # HARD-CODED POSITIONS (found manually)
         # ============================================
-        
+
         # Home position
-        self.HOME = [0, -1.57, 0, -1.57, 0, 0]
+        self.HOME = HOME
         
         # Object positions dictionary with individual place locations
         self.objects = {

@@ -12,6 +12,8 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from builtin_interfaces.msg import Duration
 
+from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
+
 
 class JointTester(Node):
     def __init__(self):
@@ -43,16 +45,8 @@ class JointTester(Node):
         )
         
         # Joint names
-        self.arm_joints = [
-            'shoulder_pan_joint',
-            'shoulder_lift_joint', 
-            'elbow_joint',
-            'wrist_1_joint',
-            'wrist_2_joint',
-            'wrist_3_joint'
-        ]
-        
-        self.gripper_joints = ['rh_r1_joint']
+        self.arm_joints = JOINT_NAMES
+        self.gripper_joints = GRIPPER_JOINTS
         
         self.get_logger().info('Joint Tester ready!')
         self.get_logger().info('Waiting for action servers...')
@@ -156,7 +150,7 @@ def main(args=None):
     print("  node.move_gripper(0.0)  - Open gripper")
     print("  node.move_gripper(0.7)  - Close gripper")
     print("\nStarting positions to try:")
-    print("  HOME:      [0, -1.57, 0, -1.57, 0, 0]")
+    print(f"  HOME:      {HOME}")
     print("  LOOK_DOWN: [0, -0.5, 0.5, -1.57, -1.57, 0]")
     print("="*60 + "\n")
     

@@ -11,7 +11,10 @@ Other nodes (like path_interpolation) can import the math directly:
 Author: Tejas
 """
 
+from typing import List, Tuple
+
 import numpy as np
+import numpy.typing as npt
 
 import rclpy
 from rclpy.node import Node
@@ -19,6 +22,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+
+from ur3e_vision_pick_place.robot_config import HOME, JOINT_NAMES
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -28,12 +33,20 @@ from builtin_interfaces.msg import Duration
 class TrajectoryProfile:
     """Trapezoidal velocity profile generator."""
 
-    def trapezoid_time_scaled(self, L, vmax, amax, dt):
-        """
-        Generate trapezoidal profile for distance L.
+    def trapezoid_time_scaled(
+        self, L: float, vmax: float, amax: float, dt: float,
+    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], float]:
+        """Generate a trapezoidal profile for a 1D distance.
+
+        Args:
+            L: Total distance to travel.
+            vmax: Maximum cruise velocity.
+            amax: Maximum acceleration/deceleration.
+            dt: Sample period, seconds.
 
         Returns:
-            t_array, s_array, t_total
+            ``(t_array, s_array, t_total)`` — sample times, travelled
+            distance at each sample, and total profile duration.
         """
         if L < 1e-8:
             return np.array([0.0]), np.array([0.0]), 0.0
@@ -69,13 +82,24 @@ class TrajectoryProfile:
 
         return np.array(t_list), np.array(s_list), t_total
 
-    def trapezoid_multi(self, L_array, vmax, amax, dt):
-        """
-        Synchronized trapezoid for multiple dimensions.
-        All share the same time base, scaled by their distance.
+    def trapezoid_multi(
+        self, L_array: List[float], vmax: float, amax: float, dt: float,
+    ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], float]:
+        """Synchronized trapezoid for multiple dimensions.
+
+        All dimensions share the same time base, scaled by their own
+        distance, so multi-joint/multi-axis motion starts and stops
+        together.
+
+        Args:
+            L_array: Distance travelled by each dimension.
+            vmax: Maximum cruise velocity (of the longest dimension).
+            amax: Maximum acceleration/deceleration.
+            dt: Sample period, seconds.
 
         Returns:
-            t_array, s_scaled (one row per dimension), t_total
+            ``(t_array, s_scaled, t_total)`` — sample times, one
+            distance row per dimension, and total profile duration.
         """
         L_array = np.array(L_array)
         L_max = np.max(L_array)
@@ -100,12 +124,9 @@ class TrapezoidalPlanner(Node):
     def __init__(self):
         super().__init__('trapezoidal_planner')
 
-        self.joint_names = [
-            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
-        ]
+        self.joint_names = JOINT_NAMES
 
-        self.HOME = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
+        self.HOME = HOME
         self.RED_BOX_GRASP = [1.255, -0.98, 1.4, -1.8, -1.61, -0.3]
 
         self.dt = 0.1
