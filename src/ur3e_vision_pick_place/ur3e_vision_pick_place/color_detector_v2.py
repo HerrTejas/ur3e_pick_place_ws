@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-Color Detector V2 - With morphological cleanup for shadow removal
+Color Detector V2
+
+2D-only color + shape detector with morphological shadow removal.
+Debug/visualization tool — does not use depth, so it does not feed
+the live pick pipeline (see object_detector.py for the 3D detector
+that does).
 """
+
+from typing import Any, Dict, List
 
 import rclpy
 from rclpy.node import Node
@@ -10,10 +17,13 @@ from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 
 class ColorDetectorV2(Node):
-    def __init__(self):
+    """2D color/shape detector with shadow-robust HSV masking."""
+
+    def __init__(self) -> None:
         super().__init__('color_detector_v2')
         
         self.bridge = CvBridge()
@@ -58,8 +68,19 @@ class ColorDetectorV2(Node):
         
         self.get_logger().info('Color Detector V2 started!')
 
-    def detect_color(self, hsv_image, color_name):
-        """Create mask for a specific color with cleanup"""
+    def detect_color(
+        self, hsv_image: npt.NDArray[np.uint8], color_name: str,
+    ) -> npt.NDArray[np.uint8]:
+        """Build a cleaned-up binary mask for one color.
+
+        Args:
+            hsv_image: Input image, HSV color space.
+            color_name: Key into ``self.colors`` ('red', 'green', 'blue').
+
+        Returns:
+            Binary mask, eroded then dilated to remove shadow noise
+            while restoring the object's footprint.
+        """
         color_info = self.colors[color_name]
         
         if color_name == 'red':
@@ -77,8 +98,16 @@ class ColorDetectorV2(Node):
         
         return mask
 
-    def is_circular(self, contour):
-        """Check if contour is circular"""
+    def is_circular(self, contour: npt.NDArray[np.int32]) -> bool:
+        """Classify a contour as circle vs. rectangle by circularity.
+
+        Args:
+            contour: OpenCV contour points.
+
+        Returns:
+            True if the contour's circularity (4*pi*area / perimeter^2)
+            exceeds 0.8.
+        """
         area = cv2.contourArea(contour)
         perimeter = cv2.arcLength(contour, True)
         
@@ -89,7 +118,12 @@ class ColorDetectorV2(Node):
         self.get_logger().info(f'Circularity: {circularity:.3f}')
         return circularity > 0.8
 
-    def image_callback(self, msg):
+    def image_callback(self, msg: Image) -> None:
+        """Detect colored shapes, draw a debug overlay, publish results.
+
+        Args:
+            msg: RGB image, bgr8 encoding.
+        """
         # Convert ROS Image to OpenCV
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
@@ -104,7 +138,7 @@ class ColorDetectorV2(Node):
         debug_image = cv_image.copy()
         
         # Store all detections
-        all_detections = []
+        all_detections: List[Dict[str, Any]] = []
         
         # Detect each color
         for color_name in self.colors:

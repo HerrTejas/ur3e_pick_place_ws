@@ -4,6 +4,8 @@ Joint Tester - Manually find joint positions for pick and place
 Run this, then adjust values to find correct positions
 """
 
+from typing import Dict, List
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -16,11 +18,13 @@ from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAME
 
 
 class JointTester(Node):
-    def __init__(self):
+    """Interactive helper to drive the arm/gripper and read back joints."""
+
+    def __init__(self) -> None:
         super().__init__('joint_tester')
-        
+
         # Current joint positions
-        self.current_positions = {}
+        self.current_positions: Dict[str, float] = {}
         
         # Subscribe to joint states
         self.joint_sub = self.create_subscription(
@@ -56,12 +60,17 @@ class JointTester(Node):
         
         self.get_logger().info('Ready! Use move_arm() and move_gripper() methods.')
         
-    def joint_callback(self, msg):
+    def joint_callback(self, msg: JointState) -> None:
+        """Track every reported joint's current position.
+
+        Args:
+            msg: Latest joint state.
+        """
         for i, name in enumerate(msg.name):
             self.current_positions[name] = msg.position[i]
-    
-    def print_current_positions(self):
-        """Print current joint positions"""
+
+    def print_current_positions(self) -> None:
+        """Log current arm + gripper joint positions, copy-paste ready."""
         self.get_logger().info('\n=== CURRENT JOINT POSITIONS ===')
         arm_pos = []
         for joint in self.arm_joints:
@@ -75,8 +84,16 @@ class JointTester(Node):
         gripper_pos = self.current_positions.get('rh_r1_joint', 0.0)
         self.get_logger().info(f'\nGripper (rh_r1_joint): {gripper_pos:.4f}')
         
-    def move_arm(self, positions, duration=3.0):
-        """Move arm to position"""
+    def move_arm(self, positions: List[float], duration: float = 3.0) -> bool:
+        """Move the arm to a joint-space goal and wait for completion.
+
+        Args:
+            positions: (6,) target joint positions, radians.
+            duration: Time to reach the goal, seconds.
+
+        Returns:
+            True if the action server accepted and completed the goal.
+        """
         goal = FollowJointTrajectory.Goal()
         
         trajectory = JointTrajectory()
@@ -106,8 +123,16 @@ class JointTester(Node):
         self.print_current_positions()
         return True
     
-    def move_gripper(self, position, duration=1.0):
-        """Move gripper (0.0 = open, 0.7 = closed)"""
+    def move_gripper(self, position: float, duration: float = 1.0) -> bool:
+        """Move the gripper to a position and wait for completion.
+
+        Args:
+            position: Gripper joint target (0.0 = open, 0.7 = closed).
+            duration: Time to reach the goal, seconds.
+
+        Returns:
+            True if the action server accepted and completed the goal.
+        """
         goal = FollowJointTrajectory.Goal()
         
         trajectory = JointTrajectory()

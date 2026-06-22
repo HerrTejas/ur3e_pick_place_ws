@@ -74,13 +74,21 @@ ros2 run ur3e_vision_pick_place color_detector_v2
 
 ### Run 3D Object Detector
 ```bash
-ros2 run ur3e_vision_pick_place object_detector_3d
+ros2 run ur3e_vision_pick_place object_detector
 ```
 
 ### View Detection Results
 ```bash
 ros2 run rqt_image_view rqt_image_view
-# Select topic: /object_detector_3d/debug_image
+# Select topic: /detected_objects_debug
+```
+
+### Run Full Vision Pick-and-Place
+```bash
+ros2 run ur3e_vision_pick_place forward_kinematics
+ros2 run ur3e_vision_pick_place object_detector
+ros2 run ur3e_vision_pick_place frame_transformer
+ros2 run ur3e_vision_pick_place vision_pick_and_place --ros-args -p target_color:=red
 ```
 
 ### Color Tuning Tool
@@ -95,8 +103,9 @@ ros2 run ur3e_vision_pick_place color_tuner
 |-------|------|-------------|
 | `/gripper_camera/image` | sensor_msgs/Image | Raw camera image |
 | `/gripper_camera/camera_info` | sensor_msgs/CameraInfo | Camera intrinsics |
-| `/object_detector_3d/debug_image` | sensor_msgs/Image | Image with detections |
-| `/detected_objects_3d` | std_msgs/String | 3D positions of objects |
+| `/detected_objects_debug` | sensor_msgs/Image | Image with detections |
+| `/detected_object/{red,green,blue}` | geometry_msgs/PointStamped | 3D position of each detected object, camera frame |
+| `/path_target_pose` | geometry_msgs/PoseStamped | Pick target in base_link, published on /pick_color trigger |
 
 ## Camera Specifications
 
@@ -120,10 +129,19 @@ ur3e_vision_pick_place/
 │   ├── gripper_camera.xacro
 │   └── gripper_camera.gazebo.xacro
 ├── ur3e_vision_pick_place/
-│   ├── color_detector.py
+│   ├── robot_config.py
 │   ├── color_detector_v2.py
 │   ├── color_tuner.py
-│   └── object_detector_3d.py
+│   ├── object_detector.py
+│   ├── frame_transformer.py
+│   ├── forward_kinematics.py
+│   ├── forward_kinematics_pure.py
+│   ├── inverse_kinematics.py
+│   ├── trapezoidal_planner.py
+│   ├── path_interpolation.py
+│   ├── pick_and_place.py
+│   ├── vision_pick_and_place.py
+│   └── joint_tester.py
 ├── package.xml
 ├── setup.py
 └── README.md

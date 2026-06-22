@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Object Detector Node
-Detects colored objects (red, green, blue) in RGB image,
-reads depth at the detected pixel, converts to 3D point
-in camera frame using the pinhole model.
 
-Publishes debug image with detections drawn on it.
+Detects colored objects (red, green, blue) in the RGB image, reads
+depth at the detected pixel, and converts to a 3D point in the camera
+frame using the pinhole model. Publishes one PointStamped per color on
+``/detected_object/{color}`` plus a debug image with detections drawn.
 
 Author: Tejas
 """
@@ -20,7 +20,9 @@ import numpy as np
 
 
 class ObjectDetector(Node):
-    def __init__(self):
+    """HSV color + depth based 3D object detector."""
+
+    def __init__(self) -> None:
         super().__init__('object_detector')
 
         self.bridge = CvBridge()
@@ -79,8 +81,12 @@ class ObjectDetector(Node):
         self.get_logger().info('Detecting: red, green, blue')
         self.get_logger().info('Debug image on: /detected_objects_debug')
 
-    def camera_info_cb(self, msg):
-        """Extract intrinsics once from the K matrix."""
+    def camera_info_cb(self, msg: CameraInfo) -> None:
+        """Extract intrinsics once from the K matrix.
+
+        Args:
+            msg: Camera intrinsics, fx/fy/cx/cy read from msg.k.
+        """
         if self.fx is not None:
             return
 
@@ -92,16 +98,30 @@ class ObjectDetector(Node):
             f'Intrinsics: fx={self.fx:.2f}, fy={self.fy:.2f}, '
             f'cx={self.cx:.2f}, cy={self.cy:.2f}')
 
-    def depth_cb(self, msg):
-        """Store latest depth image."""
+    def depth_cb(self, msg: Image) -> None:
+        """Store the latest depth image.
+
+        Args:
+            msg: Depth image, 32FC1 encoding (metres per pixel).
+        """
         try:
             self.depth_image = self.bridge.imgmsg_to_cv2(
                 msg, desired_encoding='32FC1')
         except Exception as e:
             self.get_logger().error(f'Depth conversion failed: {e}')
 
-    def rgb_cb(self, msg):
-        """Detect objects in RGB, look up depth, publish 3D points."""
+    def rgb_cb(self, msg: Image) -> None:
+        """Detect objects in RGB, look up depth, publish 3D points.
+
+        For each configured color, finds the largest matching contour,
+        looks up its depth, backprojects to a camera-frame 3D point via
+        the pinhole model, and publishes it on
+        ``/detected_object/{color}``. Also publishes an annotated debug
+        image on ``/detected_objects_debug``.
+
+        Args:
+            msg: RGB image, bgr8 encoding.
+        """
         if self.fx is None or self.depth_image is None:
             return
 

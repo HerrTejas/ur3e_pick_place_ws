@@ -8,17 +8,23 @@ Forward Kinematics - Pure Python (DH Parameters)
 Author: Tejas
 """
 
+from typing import List, Optional, Tuple
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped
 import numpy as np
+import numpy.typing as npt
 
 from ur3e_vision_pick_place.robot_config import JOINT_NAMES
 
 
 class ForwardKinematicsPure(Node):
-    def __init__(self):
+    """FK via hand-rolled DH parameters, as a cross-check on the
+    Pinocchio-based forward_kinematics.py."""
+
+    def __init__(self) -> None:
         super().__init__('forward_kinematics_pure')
 
         # Joint names
@@ -43,7 +49,7 @@ class ForwardKinematicsPure(Node):
         ])
         
         # Current joint positions
-        self.current_positions = None
+        self.current_positions: Optional[List[float]] = None
         
         # Subscriber: Joint states (only stores data)
         self.create_subscription(JointState, '/joint_states', self.joint_state_cb, 10)
@@ -57,7 +63,7 @@ class ForwardKinematicsPure(Node):
         self.get_logger().info('Forward Kinematics Pure Node Ready!')
         self.get_logger().info('Publishing to /end_effector_pose_pure at 10 Hz')
     
-    def joint_state_cb(self, msg):
+    def joint_state_cb(self, msg: JointState) -> None:
         """ONLY store current joint positions."""
         positions = {}
         for i, name in enumerate(msg.name):
@@ -67,8 +73,20 @@ class ForwardKinematicsPure(Node):
         if len(positions) == 6:
             self.current_positions = [positions[name] for name in self.joint_names]
     
-    def dh_matrix(self, theta, d, a, alpha):
-        """Compute DH transformation matrix for one joint."""
+    def dh_matrix(
+        self, theta: float, d: float, a: float, alpha: float,
+    ) -> npt.NDArray[np.float64]:
+        """Compute the standard DH transformation matrix for one joint.
+
+        Args:
+            theta: Joint angle, radians.
+            d: Link offset, metres.
+            a: Link length, metres.
+            alpha: Link twist, radians.
+
+        Returns:
+            (4, 4) homogeneous transform from this joint to the next.
+        """
         ct = np.cos(theta)
         st = np.sin(theta)
         ca = np.cos(alpha)
@@ -81,8 +99,17 @@ class ForwardKinematicsPure(Node):
             [0,      0,         0,          1   ]
         ])
     
-    def rotation_to_quaternion(self, R):
-        """Convert rotation matrix to quaternion [x, y, z, w]."""
+    def rotation_to_quaternion(
+        self, R: npt.NDArray[np.float64],
+    ) -> Tuple[float, float, float, float]:
+        """Convert a 3x3 rotation matrix to a quaternion.
+
+        Args:
+            R: (3, 3) rotation matrix.
+
+        Returns:
+            (x, y, z, w) quaternion components.
+        """
         trace = R[0, 0] + R[1, 1] + R[2, 2]
         
         if trace > 0:
@@ -112,8 +139,8 @@ class ForwardKinematicsPure(Node):
         
         return x, y, z, w
     
-    def timer_cb(self):
-        """Compute FK using DH parameters and publish."""
+    def timer_cb(self) -> None:
+        """Compute FK using DH parameters and publish the EE pose."""
         if self.current_positions is None:
             return
         

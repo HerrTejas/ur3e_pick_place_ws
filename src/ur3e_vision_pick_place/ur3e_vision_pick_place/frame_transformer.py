@@ -16,8 +16,11 @@ import tf2_geometry_msgs # needed for buffer.transform() to work with geometry_m
 from rclpy.duration import Duration
 import rclpy.time
 
+
 class FrameTransformer(Node):
-    def __init__(self):
+    """Transform a triggered color detection into a base_link grasp pose."""
+
+    def __init__(self) -> None:
         super().__init__('frame_transformer')
 
         # TF2 buffer and listner
@@ -71,8 +74,12 @@ class FrameTransformer(Node):
         self.get_logger().info(' SUbscribing to /detected_object/red, green, blue')
         self.get_logger().info(' Publishing to /path_target_pose')
 
-    def pick_color_cb(self, msg):
-        """Activate picking for a specific color."""
+    def pick_color_cb(self, msg: String) -> None:
+        """Activate picking for a specific color.
+
+        Args:
+            msg: Color name to pick — one of 'red', 'green', 'blue'.
+        """
         color = msg.data.strip().lower()
         if color not in self.colors:
             self.get_logger().warn(f'Unknown color: {color}. Use red, green, or blue.')
@@ -80,8 +87,17 @@ class FrameTransformer(Node):
         self.active_color = color
         self.get_logger().info(f'Command received: pick {self.active_color}')
 
-    def point_cb(self, msg, color):
-        """Transform point from camera frame to base_link, publish as PoseStamped."""
+    def point_cb(self, msg: PointStamped, color: str) -> None:
+        """Transform a detected point to base_link and publish a grasp pose.
+
+        Ignored unless ``color`` matches the color currently armed by
+        :meth:`pick_color_cb`; consumes that arm-state on every call so
+        only one pose is published per ``/pick_color`` command.
+
+        Args:
+            msg: Detected point, camera frame.
+            color: Color this detection topic corresponds to.
+        """
         if self.active_color is None:
             return
         if color != self.active_color:

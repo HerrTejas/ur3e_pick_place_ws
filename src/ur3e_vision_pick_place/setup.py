@@ -27,12 +27,10 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'color_detector = ur3e_vision_pick_place.color_detector:main',
             'color_detector_v2 = ur3e_vision_pick_place.color_detector_v2:main',
             'color_tuner = ur3e_vision_pick_place.color_tuner:main',
-            'object_detector_3d = ur3e_vision_pick_place.object_detector_3d:main',
-            'single_color_detector = ur3e_vision_pick_place.single_color_detector:main',
             'pick_and_place = ur3e_vision_pick_place.pick_and_place:main',
+            'vision_pick_and_place = ur3e_vision_pick_place.vision_pick_and_place:main',
             'joint_tester = ur3e_vision_pick_place.joint_tester:main',
             'trapezoidal_planner = ur3e_vision_pick_place.trapezoidal_planner:main',
             'forward_kinematics = ur3e_vision_pick_place.forward_kinematics:main',

@@ -11,12 +11,20 @@ from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 import time
+from typing import Dict, List, Optional
 
 from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
 
 
 class PickAndPlace(Node):
-    def __init__(self):
+    """Hard-coded joint-space pick-and-place for 3 known objects.
+
+    No vision — object positions were found manually with
+    joint_tester.py. See vision_pick_and_place.py for the
+    camera-driven version that picks whichever color is requested.
+    """
+
+    def __init__(self) -> None:
         super().__init__('pick_and_place')
         
         # Action clients for arm and gripper
@@ -44,7 +52,7 @@ class PickAndPlace(Node):
         self.HOME = HOME
         
         # Object positions dictionary with individual place locations
-        self.objects = {
+        self.objects: Dict[str, Dict[str, List[float]]] = {
             'red_box': {
                 'grasp':      [1.255, -0.98, 1.4, -1.8, -1.61, -0.3],
                 'pre_grasp':  [1.255, -0.94, 1.2, -1.9, -1.57, -0.3],
@@ -89,8 +97,17 @@ class PickAndPlace(Node):
         self.get_logger().info('Ready to execute pick and place!')
         self.get_logger().info(f'Available objects: {list(self.objects.keys())}')
 
-    def move_arm(self, positions, duration=None):
-        """Move arm to specified joint positions"""
+    def move_arm(self, positions: List[float], duration: Optional[float] = None) -> bool:
+        """Move the arm to a joint-space goal and wait for completion.
+
+        Args:
+            positions: (6,) target joint positions, radians.
+            duration: Time to reach the goal, seconds. Defaults to
+                ``self.move_duration``.
+
+        Returns:
+            True if the action server accepted and completed the goal.
+        """
         if duration is None:
             duration = self.move_duration
             
@@ -122,8 +139,17 @@ class PickAndPlace(Node):
         self.get_logger().info('Arm movement complete!')
         return True
 
-    def move_gripper(self, positions, duration=None):
-        """Move gripper to specified position"""
+    def move_gripper(self, positions: List[float], duration: Optional[float] = None) -> bool:
+        """Move the gripper to a goal and wait for completion.
+
+        Args:
+            positions: Target gripper joint position(s).
+            duration: Time to reach the goal, seconds. Defaults to
+                ``self.gripper_duration``.
+
+        Returns:
+            True if the action server accepted and completed the goal.
+        """
         if duration is None:
             duration = self.gripper_duration
             
@@ -156,8 +182,15 @@ class PickAndPlace(Node):
         self.get_logger().info('Gripper movement complete!')
         return True
 
-    def pick_object(self, object_name):
-        """Pick up a specific object"""
+    def pick_object(self, object_name: str) -> bool:
+        """Run the pre-grasp -> approach -> grasp -> lift sequence.
+
+        Args:
+            object_name: Key into ``self.objects``.
+
+        Returns:
+            True if the object was a known name and the sequence ran.
+        """
         if object_name not in self.objects:
             self.get_logger().error(f'Unknown object: {object_name}')
             return False
@@ -184,8 +217,15 @@ class PickAndPlace(Node):
         
         return True
 
-    def place_object(self, object_name):
-        """Place object at its designated location"""
+    def place_object(self, object_name: str) -> bool:
+        """Run the move-to-place -> lower -> release -> retreat sequence.
+
+        Args:
+            object_name: Key into ``self.objects``.
+
+        Returns:
+            True once the sequence completes.
+        """
         obj = self.objects[object_name]
         
         self.get_logger().info(f'\n>>> PLACING: {object_name} <<<')
@@ -208,8 +248,15 @@ class PickAndPlace(Node):
         
         return True
 
-    def execute_pick_place(self, object_name='red_box'):
-        """Execute pick and place for a specific object"""
+    def execute_pick_place(self, object_name: str = 'red_box') -> bool:
+        """Run the full home -> pick -> place -> home cycle for one object.
+
+        Args:
+            object_name: Key into ``self.objects``.
+
+        Returns:
+            True if every stage completed.
+        """
         
         self.get_logger().info('='*50)
         self.get_logger().info(f'PICK AND PLACE: {object_name}')
@@ -239,8 +286,8 @@ class PickAndPlace(Node):
         
         return True
 
-    def execute_all_objects(self):
-        """Pick and place all objects one by one"""
+    def execute_all_objects(self) -> None:
+        """Run execute_pick_place() for every known object, in turn."""
         for obj_name in self.objects.keys():
             self.execute_pick_place(obj_name)
             time.sleep(0.5)
