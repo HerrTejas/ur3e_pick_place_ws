@@ -26,7 +26,12 @@ GRIPPER_JOINTS: List[str] = ['rh_r1_joint']
 URDF_PATH: str = "/tmp/ur3e.urdf"
 
 #: Pinocchio frame name used as the end-effector / TCP.
-EE_FRAME: str = "tool0"
+#: Must be the gripper's grasp point, NOT the wrist flange. tool0 sits
+#: 0.125 m above the fingertips along the approach axis, so planning to
+#: tool0 drove the fingers ~10 cm through the table on every grasp.
+#: rh_p12_rn_ee is the gripper end frame (same orientation as tool0,
+#: translated to the finger tips).
+EE_FRAME: str = "rh_p12_rn_ee"
 
 #: Safe joint-space home pose (rad), arms pointing down, elbow bent.
 HOME: List[float] = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]

@@ -186,10 +186,39 @@ class PathInterpolation(Node):
             self.get_logger().error('No valid waypoints!')
             return
 
+        # Fill in per-joint velocities. Without them the controller
+        # interpolates positions at constant velocity, so velocity jumps
+        # at every waypoint -> jerky cartesian motion. Central finite
+        # difference over the actual (possibly non-uniform) timestamps
+        # gives a continuous velocity; both endpoints are pinned to zero.
+        self._fill_velocities(traj_msg.points)
+
         self.traj_pub.publish(traj_msg)
         self.get_logger().info(
             f'Published {len(traj_msg.points)} points, '
             f'{ik_failures} IK failures skipped')
+
+    @staticmethod
+    def _fill_velocities(points):
+        """Set per-joint velocities by central finite difference.
+
+        Endpoints get zero velocity; interior points use the slope across
+        their neighbours over the real elapsed time, which stays valid
+        even when IK failures left non-uniform spacing between points.
+        """
+        def secs(p):
+            return p.time_from_start.sec + p.time_from_start.nanosec * 1e-9
+
+        n = len(points)
+        positions = [np.asarray(p.positions) for p in points]
+        for i, p in enumerate(points):
+            if i == 0 or i == n - 1:
+                vel = np.zeros_like(positions[i])
+            else:
+                dt = secs(points[i + 1]) - secs(points[i - 1])
+                vel = (positions[i + 1] - positions[i - 1]) / dt if dt > 1e-9 \
+                    else np.zeros_like(positions[i])
+            p.velocities = vel.tolist()
 
 
 def main(args=None):

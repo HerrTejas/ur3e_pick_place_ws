@@ -41,6 +41,7 @@ from rclpy.action import ActionClient
 from rclpy.duration import Duration as RclDuration
 import rclpy.time
 from control_msgs.action import FollowJointTrajectory
+from action_msgs.msg import GoalStatus
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from sensor_msgs.msg import JointState
@@ -55,10 +56,14 @@ from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAME
 #: (see frame_transformer.py for the original calibration).
 GRASP_ORIENTATION = {'x': 0.999, 'y': -0.008, 'z': 0.010, 'w': -0.033}
 
-#: Cartesian offsets (metres) above the detected point, applied along
-#: the world Z axis before/after the actual grasp.
+#: Cartesian Z offsets (metres) from the detected point, applied along
+#: base_link Z. The detector reports the object's *top face*, so the
+#: grasp offset is negative: the fingertips (EE frame = rh_p12_rn_ee)
+#: descend to roughly mid-height of the 6 cm box for a secure grip.
+#: Pre-grasp/lift stay well above. Tune GRASP_CLEARANCE_M per object
+#: height if you change the boxes.
 PRE_GRASP_HEIGHT_M = 0.15
-GRASP_CLEARANCE_M = 0.02
+GRASP_CLEARANCE_M = -0.03
 LIFT_HEIGHT_M = 0.20
 
 #: Calibrated joint-space place locations per color (rad), reused from
@@ -80,6 +85,12 @@ PLACE_POSITIONS: Dict[str, Dict[str, List[float]]] = {
 
 GRIPPER_OPEN: List[float] = [0.0]
 GRIPPER_CLOSE: List[float] = [0.7]
+
+#: Motion profile limits for arm moves. Duration is scaled so the
+#: fastest joint stays under MAX_JOINT_VEL, never shorter than MIN_MOVE_SEC.
+MAX_JOINT_VEL = 0.5   # rad/s
+MIN_MOVE_SEC = 2.0    # s
+TRAJ_DT = 0.05        # s, sample period of the generated profile
 
 
 class VisionPickAndPlace(Node):
@@ -176,55 +187,184 @@ class VisionPickAndPlace(Node):
             return None
         return np.array([point_base.point.x, point_base.point.y, point_base.point.z])
 
-    def solve_ik(self, position: npt.NDArray[np.float64]) -> Optional[npt.NDArray[np.float64]]:
+    def solve_ik(
+        self, position: npt.NDArray[np.float64],
+        seed: Optional[npt.NDArray[np.float64]] = None,
+    ) -> Optional[npt.NDArray[np.float64]]:
         """Solve IK for a cartesian position with the fixed grasp orientation.
 
         Args:
             position: (3,) target position, base_link, metres.
+            seed: (6,) IK seed. Defaults to the current joints; pass the
+                previous waypoint's solution to chain pre-grasp -> grasp
+                -> lift so each stays on the same IK branch (avoids the
+                arm flipping configuration between nearby points).
 
         Returns:
-            (6,) joint solution seeded from the current joints, or None
-            if the solver couldn't converge.
+            (6,) joint solution, or None if the solver couldn't converge.
         """
+        if seed is None:
+            seed = self.current_q[:6]
         quat = GRASP_ORIENTATION
         rot = pin.Quaternion(quat['w'], quat['x'], quat['y'], quat['z']).toRotationMatrix()
         return compute_ik(
             self.model, self.data, self.ee_frame_id,
-            position, rot, self.current_q[:6])
+            position, rot, seed)
 
-    def move_arm(self, positions: List[float], duration: float = 2.0) -> bool:
+    def _trapezoid_trajectory(
+        self, start: npt.NDArray[np.float64], target: List[float],
+    ) -> List[JointTrajectoryPoint]:
+        """Build a smooth trapezoidal joint trajectory.
+
+        Sends the controller a full position+velocity profile instead of
+        a single target point. A lone point forces the controller to pick
+        its own interpolation (effectively constant velocity), so velocity
+        jumps 0->v at the start and v->0 at the end — the jerk you feel.
+        A trapezoidal profile ramps acceleration smoothly and pins both
+        endpoint velocities to zero.
+
+        Args:
+            start: (6,) current joint positions, radians.
+            target: (6,) goal joint positions, radians.
+
+        Returns:
+            Trajectory points with positions, velocities and timestamps.
+        """
+        start = np.asarray(start, dtype=float)
+        goal = np.asarray(target, dtype=float)
+        deltas = goal - start
+        max_distance = float(np.max(np.abs(deltas)))
+
+        # Already there: emit a single zero-velocity point.
+        if max_distance < 1e-6:
+            point = JointTrajectoryPoint()
+            point.positions = goal.tolist()
+            point.velocities = [0.0] * len(goal)
+            point.time_from_start = Duration(sec=0, nanosec=0)
+            return [point]
+
+        # Distance-scaled duration so big moves aren't crammed into a
+        # fixed time (which would demand huge, jerky velocities).
+        duration = max(MIN_MOVE_SEC, max_distance / MAX_JOINT_VEL)
+        t_accel = duration * 0.25
+        t_cruise = duration * 0.50
+
+        # Sample times, last one clamped to exactly `duration` so the
+        # decel parabola lands on the target instead of overshooting.
+        n = int(np.ceil(duration / TRAJ_DT))
+        times = np.linspace(0.0, duration, n + 1)
+
+        points: List[JointTrajectoryPoint] = []
+        for t in times:
+            point = JointTrajectoryPoint()
+            for j in range(len(deltas)):
+                s = start[j]
+                distance = abs(deltas[j])
+                direction = 1.0 if deltas[j] >= 0 else -1.0
+
+                if distance < 1e-9:
+                    point.positions.append(s)
+                    point.velocities.append(0.0)
+                    continue
+
+                # All joints share the same duration, so each scales its
+                # own v_max/accel by its distance -> they start/stop together.
+                v_max = distance / (0.75 * duration)
+                accel = v_max / t_accel
+
+                if t <= t_accel:
+                    vel = accel * t
+                    pos = s + direction * 0.5 * accel * t ** 2
+                elif t <= t_accel + t_cruise:
+                    t_c = t - t_accel
+                    d_accel = 0.5 * accel * t_accel ** 2
+                    vel = v_max
+                    pos = s + direction * (d_accel + v_max * t_c)
+                else:
+                    t_d = t - t_accel - t_cruise
+                    d_accel = 0.5 * v_max * t_accel
+                    d_cruise = v_max * t_cruise
+                    d_decel = v_max * t_d - 0.5 * accel * t_d ** 2
+                    vel = max(0.0, v_max - accel * t_d)
+                    pos = s + direction * (d_accel + d_cruise + d_decel)
+
+                point.positions.append(pos)
+                point.velocities.append(direction * vel)
+
+            secs = int(t)
+            point.time_from_start = Duration(sec=secs, nanosec=int((t - secs) * 1e9))
+            points.append(point)
+
+        # Pin the final point exactly on target with zero velocity.
+        points[-1].positions = goal.tolist()
+        points[-1].velocities = [0.0] * len(goal)
+        return points
+
+    def _send_and_wait(self, client, goal, expected_sec: float, label: str) -> bool:
+        """Send a trajectory goal and wait, with a timeout and status check.
+
+        Returns False (instead of blocking forever) if the goal is
+        rejected, the controller never returns a result within the
+        expected motion time plus a margin, or the motion ends in any
+        state other than SUCCEEDED — e.g. when the arm jams against an
+        object and the controller can't reach the goal. Without this the
+        node hung indefinitely on a stuck/aborted motion.
+
+        Args:
+            client: The FollowJointTrajectory action client to use.
+            goal: The populated goal message.
+            expected_sec: Planned motion duration, seconds.
+            label: Human-readable name for log messages.
+
+        Returns:
+            True only if the motion completed successfully.
+        """
+        timeout = expected_sec + 5.0  # margin for accel/comms/settling
+
+        send_future = client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future, timeout_sec=timeout)
+        goal_handle = send_future.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().error(f'{label}: goal rejected or send timed out.')
+            return False
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
+        result = result_future.result()
+        if result is None:
+            self.get_logger().error(
+                f'{label}: no result within {timeout:.1f}s — likely stuck/collided. '
+                'Cancelling and aborting.')
+            goal_handle.cancel_goal_async()
+            return False
+        if result.status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().error(
+                f'{label}: motion did not succeed (status {result.status}). Aborting.')
+            return False
+        return True
+
+    def move_arm(self, positions: List[float]) -> bool:
         """Send the arm to a joint-space goal and wait for completion.
 
         Args:
             positions: (6,) target joint positions, radians.
-            duration: Time to reach the goal, seconds.
 
         Returns:
             True if the action server accepted and completed the goal.
         """
+        points = self._trapezoid_trajectory(self.current_q[:6], positions)
         goal = FollowJointTrajectory.Goal()
-        trajectory = JointTrajectory()
-        trajectory.joint_names = JOINT_NAMES
+        goal.trajectory = JointTrajectory()
+        goal.trajectory.joint_names = JOINT_NAMES
+        goal.trajectory.points = points
 
-        point = JointTrajectoryPoint()
-        point.positions = list(positions)
-        point.time_from_start = Duration(
-            sec=int(duration), nanosec=int((duration % 1) * 1e9))
-        trajectory.points = [point]
-        goal.trajectory = trajectory
+        end = points[-1].time_from_start
+        expected_sec = end.sec + end.nanosec * 1e-9
 
         self.get_logger().info(f'Moving arm to: {[f"{p:.2f}" for p in positions]}')
-        future = self.arm_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, future)
-
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error('Arm goal rejected!')
+        if not self._send_and_wait(self.arm_client, goal, expected_sec, 'Arm'):
             return False
-
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
-        self.current_q[:6] = positions
+        self.current_q[:6] = positions  # only trust the goal once it succeeded
         return True
 
     def move_gripper(self, positions: List[float], duration: float = 0.5) -> bool:
@@ -250,17 +390,7 @@ class VisionPickAndPlace(Node):
 
         action = 'Opening' if positions[0] < 0.3 else 'Closing'
         self.get_logger().info(f'{action} gripper...')
-        future = self.gripper_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, future)
-
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error('Gripper goal rejected!')
-            return False
-
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
-        return True
+        return self._send_and_wait(self.gripper_client, goal, duration, 'Gripper')
 
     def run(self) -> bool:
         """Execute the full detect -> pick -> place -> home sequence.
@@ -282,11 +412,18 @@ class VisionPickAndPlace(Node):
         if base_position is None:
             return False
 
+        # Chain seeds: each waypoint is solved from the previous solution
+        # so the three pick poses stay on the same IK branch instead of
+        # being solved independently from HOME (which let them land on
+        # different configurations and sweep the arm through the object).
         pre_grasp_q = self.solve_ik(base_position + [0, 0, PRE_GRASP_HEIGHT_M])
-        grasp_q = self.solve_ik(base_position + [0, 0, GRASP_CLEARANCE_M])
-        lift_q = self.solve_ik(base_position + [0, 0, LIFT_HEIGHT_M])
-        if pre_grasp_q is None or grasp_q is None or lift_q is None:
-            self.get_logger().error('IK failed to find a pick solution — aborting.')
+        if pre_grasp_q is None:
+            self.get_logger().error('IK failed for pre-grasp — aborting.')
+            return False
+        grasp_q = self.solve_ik(base_position + [0, 0, GRASP_CLEARANCE_M], seed=pre_grasp_q)
+        lift_q = self.solve_ik(base_position + [0, 0, LIFT_HEIGHT_M], seed=grasp_q)
+        if grasp_q is None or lift_q is None:
+            self.get_logger().error('IK failed for grasp/lift — aborting.')
             return False
 
         place = PLACE_POSITIONS[self.target_color]
@@ -295,24 +432,28 @@ class VisionPickAndPlace(Node):
         self.get_logger().info(f'VISION PICK AND PLACE: {self.target_color}')
         self.get_logger().info('=' * 50)
 
-        self.get_logger().info('--- HOME ---')
-        self.move_arm(HOME)
-        self.move_gripper(GRIPPER_OPEN)
-
-        self.get_logger().info('--- PICK ---')
-        self.move_arm(pre_grasp_q.tolist())
-        self.move_arm(grasp_q.tolist())
-        self.move_gripper(GRIPPER_CLOSE)
-        self.move_arm(lift_q.tolist())
-
-        self.get_logger().info('--- PLACE ---')
-        self.move_arm(place['place_pre'])
-        self.move_arm(place['place_down'])
-        self.move_gripper(GRIPPER_OPEN)
-        self.move_arm(place['place_pre'])
-
-        self.get_logger().info('--- RETURN HOME ---')
-        self.move_arm(HOME)
+        # Each motion is a checkpoint: bail out the moment one fails (a
+        # stuck/aborted move or rejected goal) instead of pushing on and
+        # piling more motion onto a robot that's already off-target.
+        steps = [
+            ('--- HOME ---',         lambda: self.move_arm(HOME)),
+            (None,                   lambda: self.move_gripper(GRIPPER_OPEN)),
+            ('--- PICK ---',         lambda: self.move_arm(pre_grasp_q.tolist())),
+            (None,                   lambda: self.move_arm(grasp_q.tolist())),
+            (None,                   lambda: self.move_gripper(GRIPPER_CLOSE)),
+            (None,                   lambda: self.move_arm(lift_q.tolist())),
+            ('--- PLACE ---',        lambda: self.move_arm(place['place_pre'])),
+            (None,                   lambda: self.move_arm(place['place_down'])),
+            (None,                   lambda: self.move_gripper(GRIPPER_OPEN)),
+            (None,                   lambda: self.move_arm(place['place_pre'])),
+            ('--- RETURN HOME ---',  lambda: self.move_arm(HOME)),
+        ]
+        for header, action in steps:
+            if header:
+                self.get_logger().info(header)
+            if not action():
+                self.get_logger().error('Sequence aborted — a motion failed.')
+                return False
 
         self.get_logger().info('VISION PICK AND PLACE COMPLETE!')
         return True

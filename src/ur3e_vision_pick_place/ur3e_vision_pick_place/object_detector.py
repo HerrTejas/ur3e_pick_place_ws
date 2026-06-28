@@ -18,6 +18,14 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 
+#: Plausible depth range (metres) for a table object seen by the
+#: gripper camera. Readings outside this are rejected: anything below
+#: MIN is point-blank/near-clip noise (e.g. the camera parked on top of
+#: the object, or the gripper occluding the lens), which would localize
+#: the object at the camera and send the arm into a collision.
+MIN_VALID_DEPTH_M = 0.10
+MAX_VALID_DEPTH_M = 2.0
+
 
 class ObjectDetector(Node):
     """HSV color + depth based 3D object detector."""
@@ -163,6 +171,12 @@ class ObjectDetector(Node):
                 continue
             Z = float(self.depth_image[v, u])
             if Z <= 0.0 or np.isnan(Z) or np.isinf(Z):
+                continue
+            if not (MIN_VALID_DEPTH_M <= Z <= MAX_VALID_DEPTH_M):
+                self.get_logger().warn(
+                    f'{color}: implausible depth {Z:.3f}m at px ({u},{v}) '
+                    f'(outside [{MIN_VALID_DEPTH_M}, {MAX_VALID_DEPTH_M}]m) — '
+                    'camera too close / occluded? Skipping this detection.')
                 continue
 
             # Pinhole model

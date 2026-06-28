@@ -72,23 +72,27 @@ class TrapezoidalPlanner(Node):
         Compute and execute trapezoidal trajectory to target position.
 
         Fixes:
-        - Wraps angles to [-pi, pi] to prevent spinning
-        - Uses shortest angular path for each joint
+        - Uses shortest angular path for each joint (no long-way spins)
+        - Keeps the actual (unwrapped) start so the first point matches
+          the controller's real state — wrapping it would snap the robot
+          if a joint sits outside [-pi, pi] (UR wrists/pan often do)
         - Scales duration based on largest joint movement
         """
         if self.current_positions is None:
             self.get_logger().error('No joint states yet!')
             return
 
-        # Wrap current positions and targets to [-pi, pi]
-        start = [self.wrap_angle(p) for p in self.current_positions]
-        target = [self.wrap_angle(t) for t in target]
+        # Keep the real start; only wrap to compute the shortest delta.
+        start = list(self.current_positions)
+        start_wrapped = [self.wrap_angle(p) for p in start]
+        target_wrapped = [self.wrap_angle(t) for t in target]
 
         # Compute shortest angular distance for each joint
-        deltas = [self.shortest_angular_distance(start[j], target[j]) for j in range(6)]
+        deltas = [self.shortest_angular_distance(start_wrapped[j], target_wrapped[j])
+                  for j in range(6)]
 
-        # Compute effective end positions using shortest path
-        # (start + delta gives the target via the short route)
+        # Apply the delta to the unwrapped start so the trajectory stays
+        # continuous with the controller's current position.
         end = [start[j] + deltas[j] for j in range(6)]
 
         # Scale duration based on the largest joint movement
@@ -99,10 +103,13 @@ class TrapezoidalPlanner(Node):
         self.get_logger().info(f'Moving to: {[f"{t:.2f}" for t in target]}')
         self.get_logger().info(f'Duration: {duration:.2f}s, max joint move: {max_distance:.2f} rad')
 
-        # Time parameters
+        # Time parameters. Sample with linspace clamped to exactly
+        # `duration`: np.arange could emit a point past duration, where
+        # the decel parabola reverses (overshoot then back up) -> jerk.
         t_accel = duration * 0.25
         t_cruise = duration * 0.50
-        times = np.arange(0, duration + self.dt, self.dt)
+        n = int(np.ceil(duration / self.dt))
+        times = np.linspace(0.0, duration, n + 1)
 
         # Build trajectory
         traj_msg = JointTrajectory()
