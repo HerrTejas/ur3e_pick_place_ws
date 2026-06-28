@@ -169,7 +169,7 @@ class ObjectDetector(Node):
             point_msg.point.z = Z
 
             self.point_pubs[color].publish(point_msg)
-            self.get_logger().debug(
+            self.get_logger().info(
                 f'{color}: pixel ({u},{v}), depth {Z:.3f}m → '
                 f'camera ({X:.3f}, {Y:.3f}, {Z:.3f})')
 

@@ -38,7 +38,7 @@ def generate_launch_description():
         launch_arguments={
             'ur_type': LaunchConfiguration('ur_type'),
             'world_file': LaunchConfiguration('world'),
-            'launch_rviz': 'true',
+            'launch_rviz': 'false',
         }.items()
     )
 
@@ -83,7 +83,18 @@ def generate_launch_description():
         name='gui_node',
         output='screen'
     )
-
+    pick_and_place_v3_node = Node(
+        package='ur3e_vision_pick_place',
+        executable='pick_and_place_v3',
+        name='pick_and_place_v3',
+        output='screen'
+    )    
+    object_detector_node = Node(
+        package='ur3e_vision_pick_place',
+        executable='object_detector',
+        name='object_detector',
+        output='screen'
+    )
     return LaunchDescription([
         world_file_arg,
         ur_type_arg,
@@ -91,6 +102,8 @@ def generate_launch_description():
         gz_bridge,
         path_interpolator,
         forward_kinematics,
-        trapezoidal_planner,
-        gui_node
+        # trapezoidal_planner,
+        gui_node,
+        object_detector_node,
+        pick_and_place_v3_node
     ])

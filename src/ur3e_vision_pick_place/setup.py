@@ -42,7 +42,17 @@ setup(
             'object_detector = ur3e_vision_pick_place.object_detector:main',
             'frame_transformer = ur3e_vision_pick_place.frame_transformer:main',
             'pick_and_place_controller = ur3e_vision_pick_place.pick_and_place_controller:main',
-            'gui_node = ur3e_vision_pick_place.gui_node:main'
+            'gui_node = ur3e_vision_pick_place.gui_node:main',
+            'pick_and_place_v2 = ur3e_vision_pick_place.pick_and_place_controller_v2:main',
+            'pick_and_place_v3 = ur3e_vision_pick_place.pick_and_place_controller_v3:main',
+
+            # ── New refactored architecture (v4) ──
+            'forward_kinematics_v2 = ur3e_vision_pick_place.nodes.forward_kinematics_node:main',
+            'inverse_kinematics_v2 = ur3e_vision_pick_place.nodes.inverse_kinematics_node:main',
+            'joint_planner = ur3e_vision_pick_place.nodes.joint_planner_node:main',
+            'cartesian_planner = ur3e_vision_pick_place.nodes.cartesian_planner_node:main',
+            'pick_and_place_v4 = ur3e_vision_pick_place.nodes.pick_and_place_controller:main',
+            'pick_and_place_v4_cartesian = ur3e_vision_pick_place.nodes.pick_and_place_controller_cartesian:main',
         ],
     },
 )
