@@ -2,10 +2,10 @@
 """
 Trapezoidal Planner - Coordinated Joint-Space Motion
 
-The TrajectoryProfile math used elsewhere (e.g. path_interpolation.py)
-lives in helper_functions/trajectory_profile.py. The Node below has its
-own single-target trapezoidal move_to(), since it builds the
-JointTrajectory message inline as it goes.
+The profile math lives in helper_functions/trajectory_profile.py
+(joint_trapezoid + shortest_angular_distance). This file is just ROS
+wiring: it listens for a 6-joint target on /cmd_joint_positions and
+streams a synchronized trapezoidal JointTrajectory to the controller.
 
 Author: Tejas
 """
@@ -16,10 +16,19 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from builtin_interfaces.msg import Duration
+from trajectory_msgs.msg import JointTrajectory
 
+from ur3e_vision_pick_place.helper_functions.trajectory_profile import (
+    joint_trapezoid, shortest_angular_distance, wrap_angle,
+)
 from ur3e_vision_pick_place.robot_config import HOME, JOINT_NAMES
+from ur3e_vision_pick_place.ros_utils import profile_to_trajectory_msg
+
+#: Cruise velocity of the largest-moving joint (rad/s) and floor on the
+#: move duration (s) — short moves are stretched so they stay gentle.
+MAX_JOINT_VEL = 0.5
+MIN_MOVE_SEC = 3.0
+TRAJ_DT = 0.1
 
 
 class TrapezoidalPlanner(Node):
@@ -31,7 +40,6 @@ class TrapezoidalPlanner(Node):
         self.HOME = HOME
         self.RED_BOX_GRASP = [1.255, -0.98, 1.4, -1.8, -1.61, -0.3]
 
-        self.dt = 0.1
         self.current_positions = None
 
         self.create_subscription(JointState, '/joint_states', self.joint_state_cb, 10)
@@ -54,108 +62,34 @@ class TrapezoidalPlanner(Node):
             return
         self.move_to(list(msg.data))
 
-    def wrap_angle(self, angle):
-        """Wrap angle to [-pi, pi]."""
-        return (angle + np.pi) % (2 * np.pi) - np.pi
-
-    def shortest_angular_distance(self, start, end):
-        """
-        Compute the shortest distance between two angles.
-        Returns a signed value: positive = counter-clockwise, negative = clockwise.
-        This prevents the robot from spinning the long way around.
-        """
-        diff = self.wrap_angle(end - start)
-        return diff
-
     def move_to(self, target):
-        """
-        Compute and execute trapezoidal trajectory to target position.
+        """Stream a trapezoidal trajectory from the current joints to ``target``.
 
-        Fixes:
-        - Uses shortest angular path for each joint (no long-way spins)
-        - Keeps the actual (unwrapped) start so the first point matches
-          the controller's real state — wrapping it would snap the robot
-          if a joint sits outside [-pi, pi] (UR wrists/pan often do)
-        - Scales duration based on largest joint movement
+        The goal is rebuilt from the *unwrapped* current position plus the
+        shortest angular delta per joint: wrapping the start would snap
+        the robot if a joint sits outside [-pi, pi] (UR wrists/pan often
+        do), and taking the long way around is what used to spin the arm.
         """
         if self.current_positions is None:
             self.get_logger().error('No joint states yet!')
             return
 
-        # Keep the real start; only wrap to compute the shortest delta.
-        start = list(self.current_positions)
-        start_wrapped = [self.wrap_angle(p) for p in start]
-        target_wrapped = [self.wrap_angle(t) for t in target]
+        start = np.asarray(self.current_positions, dtype=float)
+        deltas = np.array([
+            shortest_angular_distance(wrap_angle(start[j]), wrap_angle(target[j]))
+            for j in range(6)
+        ])
+        goal = start + deltas
 
-        # Compute shortest angular distance for each joint
-        deltas = [self.shortest_angular_distance(start_wrapped[j], target_wrapped[j])
-                  for j in range(6)]
-
-        # Apply the delta to the unwrapped start so the trajectory stays
-        # continuous with the controller's current position.
-        end = [start[j] + deltas[j] for j in range(6)]
-
-        # Scale duration based on the largest joint movement
-        # Max speed ~0.8 rad/s, minimum 2 seconds
-        max_distance = max(abs(d) for d in deltas)
-        duration = max(3.0, max_distance / 0.5)
+        times, positions, velocities = joint_trapezoid(
+            start, goal, MAX_JOINT_VEL, TRAJ_DT, MIN_MOVE_SEC)
 
         self.get_logger().info(f'Moving to: {[f"{t:.2f}" for t in target]}')
-        self.get_logger().info(f'Duration: {duration:.2f}s, max joint move: {max_distance:.2f} rad')
+        self.get_logger().info(
+            f'Duration: {times[-1]:.2f}s, max joint move: {np.max(np.abs(deltas)):.2f} rad')
 
-        # Time parameters. Sample with linspace clamped to exactly
-        # `duration`: np.arange could emit a point past duration, where
-        # the decel parabola reverses (overshoot then back up) -> jerk.
-        t_accel = duration * 0.25
-        t_cruise = duration * 0.50
-        n = int(np.ceil(duration / self.dt))
-        times = np.linspace(0.0, duration, n + 1)
-
-        # Build trajectory
-        traj_msg = JointTrajectory()
-        traj_msg.joint_names = self.joint_names
-
-        for t in times:
-            point = JointTrajectoryPoint()
-
-            for j in range(6):
-                s = start[j]
-                e = end[j]
-                distance = abs(deltas[j])
-                direction = 1 if deltas[j] > 0 else -1
-
-                if distance < 1e-6:
-                    point.positions.append(s)
-                    point.velocities.append(0.0)
-                    continue
-
-                v_max = distance / (0.75 * duration)
-                accel = v_max / t_accel
-
-                if t <= t_accel:
-                    vel = accel * t
-                    pos = s + direction * 0.5 * accel * t ** 2
-                elif t <= t_accel + t_cruise:
-                    t_c = t - t_accel
-                    d_accel = 0.5 * accel * t_accel ** 2
-                    vel = v_max
-                    pos = s + direction * (d_accel + v_max * t_c)
-                else:
-                    t_d = t - t_accel - t_cruise
-                    d_accel = 0.5 * v_max * t_accel
-                    d_cruise = v_max * t_cruise
-                    d_decel = v_max * t_d - 0.5 * accel * t_d ** 2
-                    vel = v_max - accel * t_d
-                    pos = s + direction * (d_accel + d_cruise + d_decel)
-
-                point.positions.append(pos)
-                point.velocities.append(direction * max(0, vel))
-
-            secs = int(t)
-            nsecs = int((t - secs) * 1e9)
-            point.time_from_start = Duration(sec=secs, nanosec=nsecs)
-            traj_msg.points.append(point)
-
+        traj_msg = profile_to_trajectory_msg(
+            self.joint_names, times, positions, velocities)
         self.traj_pub.publish(traj_msg)
         self.get_logger().info(f'Published {len(traj_msg.points)} points')
 

@@ -18,6 +18,11 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 
+from ur3e_vision_pick_place.helper_functions.color_detection import (
+    COLOR_RANGES_HSV, DRAW_COLORS_BGR, build_color_mask,
+    find_largest_blob, pixel_to_camera,
+)
+
 #: Plausible depth range (metres) for a table object seen by the
 #: gripper camera. Readings outside this are rejected: anything below
 #: MIN is point-blank/near-clip noise (e.g. the camera parked on top of
@@ -44,26 +49,9 @@ class ObjectDetector(Node):
         # Latest depth image
         self.depth_image = None
 
-        # HSV ranges for each color
-        self.color_ranges = {
-            'red': [
-                (np.array([0, 120, 70]), np.array([10, 255, 255])),
-                (np.array([170, 120, 70]), np.array([180, 255, 255])),
-            ],
-            'green': [
-                (np.array([35, 100, 70]), np.array([85, 255, 255])),
-            ],
-            'blue': [
-                (np.array([100, 120, 70]), np.array([130, 255, 255])),
-            ],
-        }
-
-        # BGR colors for drawing on debug image
-        self.draw_colors = {
-            'red': (0, 0, 255),
-            'green': (0, 255, 0),
-            'blue': (255, 0, 0),
-        }
+        # HSV ranges + debug draw colors, shared via helper_functions
+        self.color_ranges = COLOR_RANGES_HSV
+        self.draw_colors = DRAW_COLORS_BGR
 
         # Subscribers
         self.create_subscription(
@@ -142,29 +130,12 @@ class ObjectDetector(Node):
         hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
 
         for color, ranges in self.color_ranges.items():
-            # Build combined mask
-            mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-            for lower, upper in ranges:
-                mask = mask | cv2.inRange(hsv, lower, upper)
-
-            # Find contours
-            contours, _ = cv2.findContours(
-                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            if len(contours) == 0:
+            # HSV mask + largest blob (pure OpenCV, helper_functions)
+            mask = build_color_mask(hsv, ranges)
+            blob = find_largest_blob(mask, min_area=100.0)
+            if blob is None:
                 continue
-
-            # Largest contour
-            largest = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(largest) < 100:
-                continue
-
-            # Centroid
-            M = cv2.moments(largest)
-            if M['m00'] == 0:
-                continue
-            u = int(M['m10'] / M['m00'])
-            v = int(M['m01'] / M['m00'])
+            u, v, largest = blob
 
             # Depth lookup
             if v >= self.depth_image.shape[0] or u >= self.depth_image.shape[1]:
@@ -179,9 +150,8 @@ class ObjectDetector(Node):
                     'camera too close / occluded? Skipping this detection.')
                 continue
 
-            # Pinhole model
-            X = (u - self.cx) * Z / self.fx
-            Y = (v - self.cy) * Z / self.fy
+            # Pinhole backprojection (helper_functions)
+            X, Y, Z = pixel_to_camera(u, v, Z, self.fx, self.fy, self.cx, self.cy)
 
             # Draw on debug image
             bgr = self.draw_colors[color]

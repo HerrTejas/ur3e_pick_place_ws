@@ -25,12 +25,28 @@ This project implements a complete vision pipeline for robotic manipulation:
 - ✅ TF transform integration for world coordinates
 
 ## System Architecture
+
+### Vision pipeline
 ```
 Camera Image → Color Detection → Backprojection → TF Transform → 3D World Position
      ↓              ↓                  ↓               ↓              ↓
   640x480      HSV Masking      Pinhole Model    Camera→World    (X, Y, Z)
    RGB         Contours         X=(u-cx)*Z/fx    Transform       in meters
 ```
+
+### Motion pipeline
+```
+3D Target → IK (seed-regularized DLS) → Trapezoidal Profile → JointTrajectory → Controller
+               ↓                            ↓
+        helper_functions/           helper_functions/
+        kinematics.py               trajectory_profile.py
+```
+
+All math (kinematics, trajectory profiles, cartesian interpolation,
+color detection) lives in `helper_functions/` as plain Python with **no
+ROS imports** — every node file is thin ROS wiring around those
+functions, and the math can be unit-tested without a robot or
+simulator.
 
 ## Prerequisites
 
@@ -58,6 +74,16 @@ colcon build --symlink-install
 
 # Source
 source install/setup.bash
+```
+
+### Export the URDF for Pinocchio (required once per shell/session)
+
+The kinematics helpers load the robot model from `/tmp/ur3e.urdf`
+(see `robot_config.URDF_PATH`):
+
+```bash
+xacro $(ros2 pkg prefix ur_description)/share/ur_description/urdf/ur.urdf.xacro \
+    ur_type:=ur3e name:=ur > /tmp/ur3e.urdf
 ```
 
 ## Usage
@@ -129,12 +155,15 @@ ur3e_vision_pick_place/
 │   ├── gripper_camera.xacro
 │   └── gripper_camera.gazebo.xacro
 ├── ur3e_vision_pick_place/
-│   ├── helper_functions/        # pure math, no ROS — importable by any node
-│   │   ├── kinematics.py        # load_pinocchio, compute_fk, compute_ik
-│   │   ├── trajectory_profile.py  # TrajectoryProfile (trapezoidal profiles)
-│   │   └── dh_kinematics.py     # DH-parameter FK (cross-check)
-│   ├── robot_config.py
-│   ├── color_detector_v2.py
+│   ├── helper_functions/          # pure math, NO ROS — importable anywhere
+│   │   ├── kinematics.py          # Pinocchio FK/IK (seed-regularized DLS)
+│   │   ├── dh_kinematics.py       # DH-parameter FK (cross-check)
+│   │   ├── trajectory_profile.py  # trapezoidal profiles + angle utils
+│   │   ├── path_interpolation.py  # linear + SLERP cartesian interpolation
+│   │   └── color_detection.py     # HSV masks, blob finding, pinhole model
+│   ├── robot_config.py            # joint names, limits, home, EE frame
+│   ├── ros_utils.py               # numpy profile -> JointTrajectory msg
+│   ├── color_detector_v2.py       # ROS nodes below: thin wiring only
 │   ├── color_tuner.py
 │   ├── object_detector.py
 │   ├── frame_transformer.py
@@ -146,9 +175,22 @@ ur3e_vision_pick_place/
 │   ├── pick_and_place.py
 │   ├── vision_pick_and_place.py
 │   └── joint_tester.py
+├── test/
+│   ├── test_helper_functions.py   # profile/interp/DH math (numpy only)
+│   └── test_color_detection.py    # detection math (numpy + cv2 only)
 ├── package.xml
 ├── setup.py
 └── README.md
+```
+
+## Running the Unit Tests
+
+The math in `helper_functions/` is tested without ROS, Gazebo, or a
+robot — plain pytest with numpy/OpenCV:
+
+```bash
+cd src/ur3e_vision_pick_place
+python3 -m pytest test/test_helper_functions.py test/test_color_detection.py -v
 ```
 
 ## Technical Details
@@ -170,9 +212,10 @@ Where:
 
 ### Color Detection
 
-Uses HSV color space for robust detection:
-- **Red**: H=0-10, 160-180
-- **Green**: H=55-65
+Uses HSV color space for robust detection (ranges defined once in
+`helper_functions/color_detection.py`):
+- **Red**: H=0-10, 170-180
+- **Green**: H=35-85
 - **Blue**: H=100-130
 
 Shadow removal via morphological operations (erosion + dilation).
@@ -186,10 +229,10 @@ Shadow removal via morphological operations (erosion + dilation).
 
 ## Future Work
 
+- [x] Pick and place execution (vision_pick_and_place)
+- [x] Depth camera integration (object_detector)
 - [ ] MoveIt integration for motion planning
-- [ ] Pick and place execution
 - [ ] YOLO-based object detection
-- [ ] Depth camera integration
 
 ## Author
 

@@ -43,14 +43,15 @@ import rclpy.time
 from control_msgs.action import FollowJointTrajectory
 from action_msgs.msg import GoalStatus
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from builtin_interfaces.msg import Duration
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PointStamped
 import tf2_ros
 import tf2_geometry_msgs  # needed for buffer.transform() to work with geometry_msgs
 
 from ur3e_vision_pick_place.helper_functions.kinematics import compute_ik, load_pinocchio
+from ur3e_vision_pick_place.helper_functions.trajectory_profile import joint_trapezoid
 from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
+from ur3e_vision_pick_place.ros_utils import profile_to_trajectory_msg, seconds_to_duration
 
 #: Downward-facing gripper orientation, tested with the red box grasp
 #: (see frame_transformer.py for the original calibration).
@@ -211,95 +212,6 @@ class VisionPickAndPlace(Node):
             self.model, self.data, self.ee_frame_id,
             position, rot, seed)
 
-    def _trapezoid_trajectory(
-        self, start: npt.NDArray[np.float64], target: List[float],
-    ) -> List[JointTrajectoryPoint]:
-        """Build a smooth trapezoidal joint trajectory.
-
-        Sends the controller a full position+velocity profile instead of
-        a single target point. A lone point forces the controller to pick
-        its own interpolation (effectively constant velocity), so velocity
-        jumps 0->v at the start and v->0 at the end — the jerk you feel.
-        A trapezoidal profile ramps acceleration smoothly and pins both
-        endpoint velocities to zero.
-
-        Args:
-            start: (6,) current joint positions, radians.
-            target: (6,) goal joint positions, radians.
-
-        Returns:
-            Trajectory points with positions, velocities and timestamps.
-        """
-        start = np.asarray(start, dtype=float)
-        goal = np.asarray(target, dtype=float)
-        deltas = goal - start
-        max_distance = float(np.max(np.abs(deltas)))
-
-        # Already there: emit a single zero-velocity point.
-        if max_distance < 1e-6:
-            point = JointTrajectoryPoint()
-            point.positions = goal.tolist()
-            point.velocities = [0.0] * len(goal)
-            point.time_from_start = Duration(sec=0, nanosec=0)
-            return [point]
-
-        # Distance-scaled duration so big moves aren't crammed into a
-        # fixed time (which would demand huge, jerky velocities).
-        duration = max(MIN_MOVE_SEC, max_distance / MAX_JOINT_VEL)
-        t_accel = duration * 0.25
-        t_cruise = duration * 0.50
-
-        # Sample times, last one clamped to exactly `duration` so the
-        # decel parabola lands on the target instead of overshooting.
-        n = int(np.ceil(duration / TRAJ_DT))
-        times = np.linspace(0.0, duration, n + 1)
-
-        points: List[JointTrajectoryPoint] = []
-        for t in times:
-            point = JointTrajectoryPoint()
-            for j in range(len(deltas)):
-                s = start[j]
-                distance = abs(deltas[j])
-                direction = 1.0 if deltas[j] >= 0 else -1.0
-
-                if distance < 1e-9:
-                    point.positions.append(s)
-                    point.velocities.append(0.0)
-                    continue
-
-                # All joints share the same duration, so each scales its
-                # own v_max/accel by its distance -> they start/stop together.
-                v_max = distance / (0.75 * duration)
-                accel = v_max / t_accel
-
-                if t <= t_accel:
-                    vel = accel * t
-                    pos = s + direction * 0.5 * accel * t ** 2
-                elif t <= t_accel + t_cruise:
-                    t_c = t - t_accel
-                    d_accel = 0.5 * accel * t_accel ** 2
-                    vel = v_max
-                    pos = s + direction * (d_accel + v_max * t_c)
-                else:
-                    t_d = t - t_accel - t_cruise
-                    d_accel = 0.5 * v_max * t_accel
-                    d_cruise = v_max * t_cruise
-                    d_decel = v_max * t_d - 0.5 * accel * t_d ** 2
-                    vel = max(0.0, v_max - accel * t_d)
-                    pos = s + direction * (d_accel + d_cruise + d_decel)
-
-                point.positions.append(pos)
-                point.velocities.append(direction * vel)
-
-            secs = int(t)
-            point.time_from_start = Duration(sec=secs, nanosec=int((t - secs) * 1e9))
-            points.append(point)
-
-        # Pin the final point exactly on target with zero velocity.
-        points[-1].positions = goal.tolist()
-        points[-1].velocities = [0.0] * len(goal)
-        return points
-
     def _send_and_wait(self, client, goal, expected_sec: float, label: str) -> bool:
         """Send a trajectory goal and wait, with a timeout and status check.
 
@@ -352,14 +264,18 @@ class VisionPickAndPlace(Node):
         Returns:
             True if the action server accepted and completed the goal.
         """
-        points = self._trapezoid_trajectory(self.current_q[:6], positions)
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = JointTrajectory()
-        goal.trajectory.joint_names = JOINT_NAMES
-        goal.trajectory.points = points
+        # Full position+velocity trapezoid instead of a single target
+        # point: a lone point makes the controller pick its own (constant
+        # velocity) interpolation, so speed jumps 0->v at the start and
+        # v->0 at the end — the jerk you feel.
+        times, traj_positions, velocities = joint_trapezoid(
+            self.current_q[:6], np.asarray(positions, dtype=float),
+            MAX_JOINT_VEL, TRAJ_DT, MIN_MOVE_SEC)
 
-        end = points[-1].time_from_start
-        expected_sec = end.sec + end.nanosec * 1e-9
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = profile_to_trajectory_msg(
+            JOINT_NAMES, times, traj_positions, velocities)
+        expected_sec = float(times[-1])
 
         self.get_logger().info(f'Moving arm to: {[f"{p:.2f}" for p in positions]}')
         if not self._send_and_wait(self.arm_client, goal, expected_sec, 'Arm'):
@@ -383,8 +299,7 @@ class VisionPickAndPlace(Node):
 
         point = JointTrajectoryPoint()
         point.positions = list(positions)
-        point.time_from_start = Duration(
-            sec=int(duration), nanosec=int((duration % 1) * 1e9))
+        point.time_from_start = seconds_to_duration(duration)
         trajectory.points = [point]
         goal.trajectory = trajectory
 

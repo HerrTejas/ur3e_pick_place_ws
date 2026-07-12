@@ -2,13 +2,13 @@
 """
 Path Interpolation Node — Cartesian Space
 
-Linear position + SLERP orientation, time-scaled with
-trapezoidal profile. IK converts each waypoint to joints.
+Linear position + SLERP orientation, time-scaled with a trapezoidal
+profile. IK converts each cartesian waypoint to joints.
 
-No code duplication:
-  - IK math imported from helper_functions/kinematics.py
-  - Trapezoid math imported from helper_functions/trajectory_profile.py
-  - Current EE pose read from FK node via /end_effector_pose topic
+No math lives here — this file is just ROS wiring:
+  - Cartesian interpolation from helper_functions/path_interpolation.py
+  - IK from helper_functions/kinematics.py
+  - Current EE pose read from the FK node via /end_effector_pose
 
 Input:  /path_target_pose (PoseStamped)
 Output: JointTrajectory to controller
@@ -16,19 +16,20 @@ Output: JointTrajectory to controller
 Author: Tejas
 """
 
+import numpy as np
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from builtin_interfaces.msg import Duration
-import numpy as np
-from scipy.spatial.transform import Rotation as R, Slerp
+from trajectory_msgs.msg import JointTrajectory
 
-# Import math from helper_functions — no duplication
-from ur3e_vision_pick_place.helper_functions.kinematics import load_pinocchio, compute_ik
-from ur3e_vision_pick_place.helper_functions.trajectory_profile import TrajectoryProfile
+from ur3e_vision_pick_place.helper_functions.kinematics import compute_ik, load_pinocchio
+from ur3e_vision_pick_place.helper_functions.path_interpolation import (
+    interpolate_cartesian_path, quat_to_rotation_matrix,
+)
 from ur3e_vision_pick_place.robot_config import JOINT_NAMES
+from ur3e_vision_pick_place.ros_utils import profile_to_trajectory_msg
 
 
 class PathInterpolation(Node):
@@ -44,9 +45,6 @@ class PathInterpolation(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to load URDF: {e}')
             return
-
-        # Trapezoid profile (same class trapezoidal_planner uses)
-        self.profile = TrajectoryProfile()
 
         # Profile parameters
         self.vmax = 0.3
@@ -75,8 +73,8 @@ class PathInterpolation(Node):
 
         self.get_logger().info('Path Interpolation Node Ready!')
         self.get_logger().info('  FK pose from: /end_effector_pose')
+        self.get_logger().info('  Interpolation from: helper_functions.path_interpolation')
         self.get_logger().info('  IK from: helper_functions.kinematics.compute_ik()')
-        self.get_logger().info('  Profile from: helper_functions.trajectory_profile.TrajectoryProfile')
         self.get_logger().info('  Send target to: /path_target_pose')
 
     # ── Callbacks ─────────────────────────────────────────────────
@@ -106,64 +104,42 @@ class PathInterpolation(Node):
     # ── Planning ──────────────────────────────────────────────────
 
     def plan_and_execute(self, target_msg):
-        # Start pose (from FK node topic)
+        # Start pose (from FK node topic) and end pose (the request)
         sp = self.current_pose.pose
-        start_pos = np.array([sp.position.x, sp.position.y, sp.position.z])
-        r_start = R.from_quat([
-            sp.orientation.x, sp.orientation.y,
-            sp.orientation.z, sp.orientation.w])
-
-        # End pose
         ep = target_msg.pose
+        start_pos = np.array([sp.position.x, sp.position.y, sp.position.z])
+        start_quat = np.array([sp.orientation.x, sp.orientation.y,
+                               sp.orientation.z, sp.orientation.w])
         end_pos = np.array([ep.position.x, ep.position.y, ep.position.z])
-        r_end = R.from_quat([
-            ep.orientation.x, ep.orientation.y,
-            ep.orientation.z, ep.orientation.w])
+        end_quat = np.array([ep.orientation.x, ep.orientation.y,
+                             ep.orientation.z, ep.orientation.w])
 
-        # Path lengths
-        L_pos = np.linalg.norm(end_pos - start_pos)
-        L_ori = (r_start.inv() * r_end).magnitude()
+        self.get_logger().info(
+            f'Position distance: {np.linalg.norm(end_pos - start_pos):.4f} m')
 
-        self.get_logger().info(f'Position distance: {L_pos:.4f} m')
-        self.get_logger().info(f'Orientation distance: {L_ori:.4f} rad')
+        # Straight-line + SLERP path, trapezoid time-scaled (pure math)
+        times, positions, quaternions = interpolate_cartesian_path(
+            start_pos, start_quat, end_pos, end_quat,
+            self.vmax, self.amax, self.dt)
 
-        if max(L_pos, L_ori) < 1e-6:
+        if len(times) == 1 and np.allclose(positions[0], start_pos, atol=1e-6):
             self.get_logger().info('Already at target.')
             return
 
-        # Synchronized trapezoidal profile
-        t_array, s_scaled, _ = self.profile.trapezoid_multi(
-            [L_pos, L_ori], self.vmax, self.amax, self.dt)
-
-        s_pos = s_scaled[0]
-        s_ori = s_scaled[1]
-
         self.get_logger().info(
-            f'Trajectory: {len(t_array)} waypoints, {t_array[-1]:.2f}s')
+            f'Trajectory: {len(times)} waypoints, {times[-1]:.2f}s')
 
-        # Setup SLERP
-        rots = R.concatenate([r_start, r_end])
-        slerp = Slerp([0.0, 1.0], rots)
-
-        # Interpolate + IK
-        traj_msg = JointTrajectory()
-        traj_msg.joint_names = self.joint_names
+        # IK each cartesian waypoint, seeding from the previous solution
+        # so the whole path stays on one IK branch.
         q_seed = self.current_q.copy()
+        joint_times = []
+        joint_positions = []
         ik_failures = 0
 
-        for i in range(len(t_array)):
-            t_pos = (s_pos[i] / L_pos) if L_pos > 1e-6 else 0.0
-            t_ori = (s_ori[i] / L_ori) if L_ori > 1e-6 else 0.0
-            t_interp = min(max(t_pos, t_ori), 1.0)
-
-            # Cartesian interpolation: linear pos + SLERP orientation
-            pos = (1.0 - t_interp) * start_pos + t_interp * end_pos
-            r_interp = slerp(t_interp)
-
-            # IK (same function the IK node uses)
+        for i in range(len(times)):
             q_sol = compute_ik(
                 self.model, self.data, self.ee_frame_id,
-                pos, r_interp.as_matrix(), q_seed)
+                positions[i], quat_to_rotation_matrix(quaternions[i]), q_seed)
 
             if q_sol is None:
                 ik_failures += 1
@@ -174,51 +150,40 @@ class PathInterpolation(Node):
                 continue
 
             q_seed = q_sol.copy()
+            joint_times.append(times[i])
+            joint_positions.append(q_sol)
 
-            point = JointTrajectoryPoint()
-            point.positions = q_sol.tolist()
-            t = t_array[i]
-            point.time_from_start = Duration(
-                sec=int(t), nanosec=int((t - int(t)) * 1e9))
-            traj_msg.points.append(point)
-
-        if not traj_msg.points:
+        if not joint_positions:
             self.get_logger().error('No valid waypoints!')
             return
 
-        # Fill in per-joint velocities. Without them the controller
-        # interpolates positions at constant velocity, so velocity jumps
-        # at every waypoint -> jerky cartesian motion. Central finite
-        # difference over the actual (possibly non-uniform) timestamps
-        # gives a continuous velocity; both endpoints are pinned to zero.
-        self._fill_velocities(traj_msg.points)
+        joint_times = np.asarray(joint_times)
+        joint_positions = np.asarray(joint_positions)
 
+        # Per-joint velocities by central finite difference. Without
+        # them the controller interpolates positions at constant
+        # velocity, so speed jumps at every waypoint -> jerky motion.
+        # The real timestamps are used, which stays valid even when IK
+        # failures left non-uniform spacing; endpoints are pinned to 0.
+        velocities = self._finite_difference_velocities(joint_times, joint_positions)
+
+        traj_msg = profile_to_trajectory_msg(
+            self.joint_names, joint_times, joint_positions, velocities)
         self.traj_pub.publish(traj_msg)
         self.get_logger().info(
             f'Published {len(traj_msg.points)} points, '
             f'{ik_failures} IK failures skipped')
 
     @staticmethod
-    def _fill_velocities(points):
-        """Set per-joint velocities by central finite difference.
-
-        Endpoints get zero velocity; interior points use the slope across
-        their neighbours over the real elapsed time, which stays valid
-        even when IK failures left non-uniform spacing between points.
-        """
-        def secs(p):
-            return p.time_from_start.sec + p.time_from_start.nanosec * 1e-9
-
-        n = len(points)
-        positions = [np.asarray(p.positions) for p in points]
-        for i, p in enumerate(points):
-            if i == 0 or i == n - 1:
-                vel = np.zeros_like(positions[i])
-            else:
-                dt = secs(points[i + 1]) - secs(points[i - 1])
-                vel = (positions[i + 1] - positions[i - 1]) / dt if dt > 1e-9 \
-                    else np.zeros_like(positions[i])
-            p.velocities = vel.tolist()
+    def _finite_difference_velocities(times, positions):
+        """Central-difference joint velocities, zero at both endpoints."""
+        n = len(times)
+        velocities = np.zeros_like(positions)
+        for i in range(1, n - 1):
+            dt = times[i + 1] - times[i - 1]
+            if dt > 1e-9:
+                velocities[i] = (positions[i + 1] - positions[i - 1]) / dt
+        return velocities
 
 
 def main(args=None):
