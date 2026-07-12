@@ -139,7 +139,8 @@ class PathInterpolation(Node):
         for i in range(len(times)):
             q_sol = compute_ik(
                 self.model, self.data, self.ee_frame_id,
-                positions[i], quat_to_rotation_matrix(quaternions[i]), q_seed)
+                positions[i], quat_to_rotation_matrix(quaternions[i]), q_seed,
+                joint_names=JOINT_NAMES)
 
             if q_sol is None:
                 ik_failures += 1

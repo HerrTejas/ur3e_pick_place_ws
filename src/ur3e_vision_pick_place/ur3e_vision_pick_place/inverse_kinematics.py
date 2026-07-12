@@ -86,9 +86,10 @@ class InverseKinematics(Node):
         ]
         rot = pin.Quaternion(quat[3], quat[0], quat[1], quat[2]).toRotationMatrix()
 
-        # Call the standalone function
+        # Call the standalone function. joint_names selects just the 6
+        # arm joints — the URDF also contains the gripper's joints.
         q = compute_ik(self.model, self.data, self.ee_frame_id,
-                       pos, rot, self.current_q[:6])
+                       pos, rot, self.current_q[:6], joint_names=JOINT_NAMES)
 
         if q is not None:
             msg = Float64MultiArray()

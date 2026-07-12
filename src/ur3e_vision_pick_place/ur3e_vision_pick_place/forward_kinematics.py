@@ -65,7 +65,10 @@ class ForwardKinematics(Node):
         if self.current_positions is None:
             return
 
-        ee_pose = compute_fk(self.model, self.data, self.ee_frame_id, self.current_positions)
+        # joint_names selects just the 6 arm joints — the URDF also
+        # contains the gripper's revolute joints.
+        ee_pose = compute_fk(self.model, self.data, self.ee_frame_id,
+                             self.current_positions, joint_names=JOINT_NAMES)
         position = ee_pose.translation
         quaternion = pin.Quaternion(ee_pose.rotation)
 

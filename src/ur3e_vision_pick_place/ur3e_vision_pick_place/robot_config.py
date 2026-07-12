@@ -40,6 +40,8 @@ HOME: List[float] = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
 #: Universal_Robots_ROS2_Description/config/ur3e/joint_limits.yaml
 #: (UR3e User Manual, version 5.8). wrist_3 is the only joint with
 #: more than one full turn of range; the others are hard end-stops.
+#: NOTE: kept for reference/tests only — the IK solver now reads limits
+#: from the URDF via the Pinocchio model, so it stays arm-agnostic.
 JOINT_LIMITS_RAD: List[Tuple[float, float]] = [
     (np.deg2rad(-200.0), np.deg2rad(200.0)),  # shoulder_pan_joint
     (np.deg2rad(-180.0), np.deg2rad(180.0)),  # shoulder_lift_joint

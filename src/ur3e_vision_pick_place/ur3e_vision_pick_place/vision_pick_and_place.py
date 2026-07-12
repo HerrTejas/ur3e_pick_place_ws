@@ -208,9 +208,11 @@ class VisionPickAndPlace(Node):
             seed = self.current_q[:6]
         quat = GRASP_ORIENTATION
         rot = pin.Quaternion(quat['w'], quat['x'], quat['y'], quat['z']).toRotationMatrix()
+        # joint_names selects just the 6 arm joints — the URDF also
+        # contains the gripper's revolute joints.
         return compute_ik(
             self.model, self.data, self.ee_frame_id,
-            position, rot, seed)
+            position, rot, seed, joint_names=JOINT_NAMES)
 
     def _send_and_wait(self, client, goal, expected_sec: float, label: str) -> bool:
         """Send a trajectory goal and wait, with a timeout and status check.
