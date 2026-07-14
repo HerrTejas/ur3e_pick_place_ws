@@ -43,6 +43,15 @@ def load_pinocchio(
         Exception: Propagated as-is from Pinocchio if the URDF cannot
             be parsed (callers already wrap this in a try/except).
     """
+    # Auto-export the URDF on first use in a fresh session — this used
+    # to be a manual `xacro ... > /tmp/ur3e.urdf` step every time.
+    # Lazy import so this module stays importable without ament/xacro
+    # (e.g. in Isaac Sim, where callers pass their own urdf_path).
+    import os
+    if not os.path.exists(urdf_path):
+        from ur3e_vision_pick_place.urdf_export import ensure_urdf
+        ensure_urdf(urdf_path)
+
     model = pin.buildModelFromUrdf(urdf_path)
     data = model.createData()
     if not model.existFrame(ee_frame):

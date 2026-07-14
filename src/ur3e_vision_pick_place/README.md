@@ -76,14 +76,17 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### Export the URDF for Pinocchio (required once per shell/session)
+### URDF for Pinocchio — automatic
 
 The kinematics helpers load the robot model from `/tmp/ur3e.urdf`
-(see `robot_config.URDF_PATH`):
+(see `robot_config.URDF_PATH`). If the file is missing, it is
+**exported automatically on first use** (`urdf_export.ensure_urdf()`),
+so no manual xacro step is needed anymore.
+
+After changing the robot description, force a re-export with:
 
 ```bash
-xacro $(ros2 pkg prefix ur_description)/share/ur_description/urdf/ur.urdf.xacro \
-    ur_type:=ur3e name:=ur > /tmp/ur3e.urdf
+rm /tmp/ur3e.urdf
 ```
 
 ## Usage
