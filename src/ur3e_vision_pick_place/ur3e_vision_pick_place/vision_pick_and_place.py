@@ -238,7 +238,15 @@ class VisionPickAndPlace(Node):
         Returns:
             True only if the motion completed successfully.
         """
-        timeout = expected_sec + 5.0  # margin for accel/comms/settling
+        # Wall-clock timeout for a SIM-time motion. The controller plays
+        # the trajectory on Gazebo's clock, so when the real-time factor
+        # drops below 1 (RGBD camera + point cloud rendering are heavy),
+        # a 3 s move can take 8-10 wall seconds. The old expected+5s
+        # margin then expired mid-motion, cancelled the goal — which
+        # looks like the arm violently stopping ("jerk") — and aborted
+        # the rest of the sequence. 3x + 10 s tolerates RTF down to ~0.3
+        # while still bailing out on a genuinely stuck motion.
+        timeout = expected_sec * 3.0 + 10.0
 
         send_future = client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future, timeout_sec=timeout)
