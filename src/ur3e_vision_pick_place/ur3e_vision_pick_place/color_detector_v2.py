@@ -36,7 +36,7 @@ class ColorDetectorV2(Node):
         # Subscribe to camera
         self.image_sub = self.create_subscription(
             Image,
-            '/gripper_camera/image',
+            '/overhead_camera/image',
             self.image_callback,
             10
         )

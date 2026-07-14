@@ -27,7 +27,7 @@ class ColorTuner(Node):
         
         self.image_sub = self.create_subscription(
             Image,
-            '/gripper_camera/image',
+            '/overhead_camera/image',
             self.image_callback,
             10
         )

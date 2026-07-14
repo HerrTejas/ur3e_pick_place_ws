@@ -105,6 +105,11 @@ ros2 run ur3e_vision_pick_place object_detector
 
 ### View Detection Results
 ```bash
+# Detector + viewer together — rqt_image_view opens already showing the
+# annotated detection image (no need to pick the topic by hand):
+ros2 launch ur3e_vision_pick_place detector.launch.py
+
+# Or just the viewer on its own:
 ros2 run rqt_image_view rqt_image_view
 # Select topic: /detected_objects_debug
 ```
@@ -127,8 +132,10 @@ ros2 run ur3e_vision_pick_place color_tuner
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/gripper_camera/image` | sensor_msgs/Image | Raw camera image |
-| `/gripper_camera/camera_info` | sensor_msgs/CameraInfo | Camera intrinsics |
+| `/overhead_camera/image` | sensor_msgs/Image | Raw RGB image (fixed top-down view) |
+| `/overhead_camera/depth_image` | sensor_msgs/Image | Depth image (grey = distance, not a bug) |
+| `/overhead_camera/camera_info` | sensor_msgs/CameraInfo | Camera intrinsics |
+| `/overhead_camera/points` | sensor_msgs/PointCloud2 | Depth point cloud (not viewable in rqt_image_view) |
 | `/detected_objects_debug` | sensor_msgs/Image | Image with detections |
 | `/detected_object/{red,green,blue}` | geometry_msgs/PointStamped | 3D position of each detected object, camera frame |
 | `/path_target_pose` | geometry_msgs/PoseStamped | Pick target in base_link, published on /pick_color trigger |
@@ -151,9 +158,9 @@ ur3e_vision_pick_place/
 │   └── pick_place_world.sdf
 ├── config/
 │   └── gz_bridge.yaml
-├── urdf/
-│   ├── gripper_camera.xacro
-│   └── gripper_camera.gazebo.xacro
+│   # NOTE: the camera now lives in the rh_p12_rn_a_description package
+│   # (overhead_camera, fixed to base_link) — see rh_p12_rn_a_gripper.xacro
+│   # and rh_p12_rn_a.gazebo.
 ├── ur3e_vision_pick_place/
 │   ├── helper_functions/          # pure math, NO ROS — importable anywhere
 │   │   ├── kinematics.py          # Pinocchio FK/IK (seed-regularized DLS)

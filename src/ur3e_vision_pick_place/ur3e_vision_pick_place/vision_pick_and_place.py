@@ -49,7 +49,9 @@ import tf2_ros
 import tf2_geometry_msgs  # needed for buffer.transform() to work with geometry_msgs
 
 from ur3e_vision_pick_place.helper_functions.kinematics import compute_ik, load_pinocchio
-from ur3e_vision_pick_place.helper_functions.trajectory_profile import joint_trapezoid
+from ur3e_vision_pick_place.helper_functions.trajectory_profile import (
+    joint_trapezoid, shortest_angular_distance,
+)
 from ur3e_vision_pick_place.robot_config import GRIPPER_JOINTS, HOME, JOINT_NAMES
 from ur3e_vision_pick_place.ros_utils import profile_to_trajectory_msg, seconds_to_duration
 
@@ -89,8 +91,11 @@ GRIPPER_CLOSE: List[float] = [0.7]
 
 #: Motion profile limits for arm moves. Duration is scaled so the
 #: fastest joint stays under MAX_JOINT_VEL, never shorter than MIN_MOVE_SEC.
-MAX_JOINT_VEL = 0.5   # rad/s
-MIN_MOVE_SEC = 2.0    # s
+#: Kept deliberately gentle: a lower cruise speed and a longer floor time
+#: soften acceleration, so contact with a box (pick/place) doesn't spike
+#: the physics and the arm never whips through a large transit.
+MAX_JOINT_VEL = 0.35  # rad/s
+MIN_MOVE_SEC = 3.0    # s
 TRAJ_DT = 0.05        # s, sample period of the generated profile
 
 
@@ -266,23 +271,46 @@ class VisionPickAndPlace(Node):
         Returns:
             True if the action server accepted and completed the goal.
         """
+        # Snap each target joint to its nearest co-terminal angle (within
+        # +/-pi of where the joint is now). joint_trapezoid interpolates
+        # linearly start->goal, so a raw target more than half a turn away
+        # (e.g. a hard-coded place pose vs. the current wrist winding) makes
+        # that joint spin the LONG way around — the wild sweep between pick
+        # and place. Taking the shortest rotation keeps every move direct.
+        start = self.current_q[:6]
+        goal = np.array([
+            start[j] + shortest_angular_distance(start[j], positions[j])
+            for j in range(6)
+        ])
+
         # Full position+velocity trapezoid instead of a single target
         # point: a lone point makes the controller pick its own (constant
         # velocity) interpolation, so speed jumps 0->v at the start and
         # v->0 at the end — the jerk you feel.
         times, traj_positions, velocities = joint_trapezoid(
-            self.current_q[:6], np.asarray(positions, dtype=float),
-            MAX_JOINT_VEL, TRAJ_DT, MIN_MOVE_SEC)
+            start, goal, MAX_JOINT_VEL, TRAJ_DT, MIN_MOVE_SEC)
 
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = profile_to_trajectory_msg(
+        arm_goal = FollowJointTrajectory.Goal()
+        arm_goal.trajectory = profile_to_trajectory_msg(
             JOINT_NAMES, times, traj_positions, velocities)
         expected_sec = float(times[-1])
 
-        self.get_logger().info(f'Moving arm to: {[f"{p:.2f}" for p in positions]}')
-        if not self._send_and_wait(self.arm_client, goal, expected_sec, 'Arm'):
+        # Diagnostic: the largest per-joint move and the planned duration.
+        # A move that jerks "super fast" is either (a) unexpectedly large
+        # here — an IK branch flip sending a joint most of a turn — or
+        # (b) large here but the arm still finishes way before expected_sec,
+        # meaning the controller is racing the trajectory (a clock / speed-
+        # scaling problem, not our profile). Compare this against how long
+        # the move actually takes on screen.
+        max_move = float(np.max(np.abs(goal - start)))
+        which = JOINT_NAMES[int(np.argmax(np.abs(goal - start)))]
+        self.get_logger().info(
+            f'Moving arm to: {[f"{p:.2f}" for p in positions]} | '
+            f'max joint move {max_move:.2f} rad ({which}), '
+            f'planned {expected_sec:.1f}s')
+        if not self._send_and_wait(self.arm_client, arm_goal, expected_sec, 'Arm'):
             return False
-        self.current_q[:6] = positions  # only trust the goal once it succeeded
+        self.current_q[:6] = goal  # only trust the goal once it succeeded
         return True
 
     def move_gripper(self, positions: List[float], duration: float = 0.5) -> bool:
@@ -345,6 +373,20 @@ class VisionPickAndPlace(Node):
 
         place = PLACE_POSITIONS[self.target_color]
 
+        # Freeze the wrist (joint 6 / wrist_3) at the grasp value for the
+        # whole carry. A top-down grasp is symmetric about the vertical
+        # axis, so the gripper's yaw is irrelevant for placing — but the
+        # hard-coded place poses use wrist_3 = -0.30 while IK gives each
+        # grasp a very different wrist_3 (e.g. blue -2.24). Moving between
+        # them spun the wrist ~2 rad mid-carry and flung the block out.
+        # Overriding only wrist_3 leaves the place *position* unchanged
+        # (that joint just rotates the last link about the approach axis).
+        grasp_wrist3 = float(grasp_q[5])
+        place_pre = list(place['place_pre'])
+        place_down = list(place['place_down'])
+        place_pre[5] = grasp_wrist3
+        place_down[5] = grasp_wrist3
+
         self.get_logger().info('=' * 50)
         self.get_logger().info(f'VISION PICK AND PLACE: {self.target_color}')
         self.get_logger().info('=' * 50)
@@ -359,10 +401,10 @@ class VisionPickAndPlace(Node):
             (None,                   lambda: self.move_arm(grasp_q.tolist())),
             (None,                   lambda: self.move_gripper(GRIPPER_CLOSE)),
             (None,                   lambda: self.move_arm(lift_q.tolist())),
-            ('--- PLACE ---',        lambda: self.move_arm(place['place_pre'])),
-            (None,                   lambda: self.move_arm(place['place_down'])),
+            ('--- PLACE ---',        lambda: self.move_arm(place_pre)),
+            (None,                   lambda: self.move_arm(place_down)),
             (None,                   lambda: self.move_gripper(GRIPPER_OPEN)),
-            (None,                   lambda: self.move_arm(place['place_pre'])),
+            (None,                   lambda: self.move_arm(place_pre)),
             ('--- RETURN HOME ---',  lambda: self.move_arm(HOME)),
         ]
         for header, action in steps:

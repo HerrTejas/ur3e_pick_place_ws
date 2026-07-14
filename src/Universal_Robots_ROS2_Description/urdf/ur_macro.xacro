@@ -403,16 +403,10 @@
       <child link="${tf_prefix}end_effector_link"/>
     </joint>
 
-    <!-- End effector link -->
+    <!-- End effector link (coordinate frame only). Visual removed so the
+         overhead camera does not detect this small red marker box as a
+         stray red object. -->
     <link name="${tf_prefix}end_effector_link">
-      <visual>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
-        <geometry>
-          <box size="0.01 0.01 0.01" />
-        </geometry>
-        <material name="red"/>
-      </visual>
-
       <inertial>
         <origin xyz="0 0 0" />
         <mass value="1.0e-03" />

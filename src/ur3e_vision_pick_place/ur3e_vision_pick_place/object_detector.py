@@ -55,13 +55,13 @@ class ObjectDetector(Node):
 
         # Subscribers
         self.create_subscription(
-            CameraInfo, '/gripper_camera/camera_info',
+            CameraInfo, '/overhead_camera/camera_info',
             self.camera_info_cb, 10)
         self.create_subscription(
-            Image, '/gripper_camera/depth_image',
+            Image, '/overhead_camera/depth_image',
             self.depth_cb, 10)
         self.create_subscription(
-            Image, '/gripper_camera/image',
+            Image, '/overhead_camera/image',
             self.rgb_cb, 10)
 
         # One publisher per color
@@ -167,7 +167,7 @@ class ObjectDetector(Node):
             # Publish 3D point
             point_msg = PointStamped()
             point_msg.header.stamp = msg.header.stamp
-            point_msg.header.frame_id = 'gripper_camera_optical_link'
+            point_msg.header.frame_id = 'overhead_camera_optical_link'
             point_msg.point.x = X
             point_msg.point.y = Y
             point_msg.point.z = Z
